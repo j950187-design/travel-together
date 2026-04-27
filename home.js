@@ -126,3 +126,108 @@ document.querySelectorAll("[data-close]").forEach(el => {
 document.querySelectorAll(".modal").forEach(m => {
   m.addEventListener("click", e => { if (e.target === m) m.hidden = true; });
 });
+
+// ============================================================
+// 📤 匯出：把所有旅行打包成 .json 檔下載
+// ============================================================
+document.getElementById("exportAllBtn").addEventListener("click", () => {
+  const trips = loadAllTrips();
+  const tripCount = Object.keys(trips).length;
+  if (tripCount === 0) {
+    alert("📭 目前沒有任何旅行可以匯出，先新增一個吧！");
+    return;
+  }
+  const data = {
+    app: "TravelTogether",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    trips,
+  };
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const date = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `travel-backup-${date}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+// ============================================================
+// 📥 匯入：從 .json 檔還原 / 合併旅行
+// ============================================================
+document.getElementById("importInput").addEventListener("change", e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const parsed = JSON.parse(ev.target.result);
+
+      // 接受兩種格式：
+      // 1) 我們匯出的格式 { app, version, trips: { id: trip } }
+      // 2) 直接是 trips 物件 { id: trip }
+      let incoming;
+      if (parsed && typeof parsed === "object" && parsed.trips && typeof parsed.trips === "object") {
+        incoming = parsed.trips;
+      } else if (parsed && typeof parsed === "object" && Object.values(parsed).every(t => t && t.meta)) {
+        incoming = parsed;
+      } else {
+        throw new Error("檔案內容不是旅行資料");
+      }
+
+      const incomingIds = Object.keys(incoming);
+      if (incomingIds.length === 0) {
+        alert("📭 這個檔案裡沒有任何旅行喔");
+        return;
+      }
+
+      const existing = loadAllTrips();
+      const overlap = incomingIds.filter(id => existing[id]);
+
+      // 如果有重疊：詢問要覆蓋還是當新的另存
+      let proceed = true;
+      let mode = "merge";
+      if (overlap.length > 0) {
+        const choice = confirm(
+          `要匯入 ${incomingIds.length} 趟旅行，其中 ${overlap.length} 趟跟現有的 ID 重複。\n\n` +
+          `按「確定」→ 覆蓋同 ID 的舊資料\n` +
+          `按「取消」→ 把它們當新旅行另存（不覆蓋）`
+        );
+        mode = choice ? "overwrite" : "asNew";
+      }
+
+      let added = 0, replaced = 0;
+      for (const [id, trip] of Object.entries(incoming)) {
+        if (existing[id]) {
+          if (mode === "overwrite") {
+            existing[id] = trip;
+            replaced++;
+          } else {
+            // 另存新 ID，避免覆蓋
+            const newId = newTripId();
+            const renamed = JSON.parse(JSON.stringify(trip));
+            if (renamed.meta) renamed.meta.title = (renamed.meta.title || "未命名") + "（匯入）";
+            existing[newId] = renamed;
+            added++;
+          }
+        } else {
+          existing[id] = trip;
+          added++;
+        }
+      }
+      saveAllTrips(existing);
+      alert(`📥 匯入完成！\n新增 ${added} 趟${replaced ? `、覆蓋 ${replaced} 趟舊資料` : ""}。`);
+      renderTrips();
+    } catch (err) {
+      alert(`😢 匯入失敗：${err.message}\n請確認是從本程式匯出的 .json 檔案。`);
+    }
+    // 清空 input value，下次選同一個檔也會觸發
+    e.target.value = "";
+  };
+  reader.onerror = () => alert("😢 讀取檔案失敗，請再試一次");
+  reader.readAsText(file, "utf-8");
+});

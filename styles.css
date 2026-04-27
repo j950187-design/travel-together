@@ -486,8 +486,20 @@ input { font-family: inherit; }
   justify-content: space-between;
   align-items: center;
   margin-bottom: 22px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 .section-head h2 { font-size: 22px; }
+.home-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.home-actions label.btn {
+  cursor: pointer;
+  margin: 0;
+}
 
 .trip-grid {
   display: grid;

@@ -28,12 +28,20 @@
 <main class="home-main">
   <div class="section-head">
     <h2>📚 我的旅行書櫃</h2>
-    <button class="btn btn-primary" id="newTripBtn">＋ 新增旅行</button>
+    <div class="home-actions">
+      <button class="btn btn-ghost" id="exportAllBtn" title="匯出所有旅行成 .json 檔">📤 匯出</button>
+      <label class="btn btn-ghost" title="從 .json 檔匯入旅行">
+        📥 匯入
+        <input type="file" id="importInput" accept="application/json,.json" hidden />
+      </label>
+      <button class="btn btn-primary" id="newTripBtn">＋ 新增旅行</button>
+    </div>
   </div>
   <div class="trip-grid" id="tripGrid"></div>
 
   <p class="muted small home-hint">
-    💡 所有旅行會自動存在你的瀏覽器裡，下次打開還在。把網址分享給朋友，他們也能看到同一趟旅行（即時共編功能等正式版接上雲端後就會通！）。
+    💡 所有旅行會存在這個瀏覽器裡（不會跨裝置同步）。
+    <br/>要把資料搬到別台電腦 / 別個瀏覽器 / 線上版本，按 <b>📤 匯出</b> 下載 .json 檔，到另一邊按 <b>📥 匯入</b> 拖進去就還原了 📦
   </p>
 </main>
 
