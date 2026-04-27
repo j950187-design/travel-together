@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>行程規劃 · 一起去玩吧！🌸</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- ======== 頂部 ======== -->
+<header class="topbar no-print">
+  <div class="brand">
+    <a class="back-btn" href="index.html" title="回到首頁">←</a>
+    <span class="brand-icon">🧳</span>
+    <div>
+      <h1 id="tripTitleH1" contenteditable="true" spellcheck="false">載入中…</h1>
+      <p class="sub" id="tripDatesP" contenteditable="true" spellcheck="false"></p>
+    </div>
+  </div>
+
+  <div class="top-actions">
+    <button class="btn btn-ghost" id="exportPdfBtn" title="匯出成 PDF">📄 匯出 PDF</button>
+    <div class="avatars" title="一起規劃的夥伴">
+      <span class="avatar" style="background:#FFB5A7">小</span>
+      <span class="avatar" style="background:#B8E0D2">安</span>
+      <span class="avatar" style="background:#FCD5CE">琪</span>
+      <span class="avatar more">+2</span>
+    </div>
+    <button class="btn btn-primary" id="inviteBtn">＋ 邀請朋友</button>
+  </div>
+</header>
+
+<!-- ======== 主體 ======== -->
+<main class="layout no-print">
+  <section class="plan">
+
+    <!-- 去程 / 回程 -->
+    <div class="card travel-card">
+      <div class="card-head">
+        <span class="emoji">✈️</span>
+        <h2>出發與回程</h2>
+      </div>
+      <div class="travel-grid">
+        <div class="travel-item" data-leg="outbound">
+          <div class="travel-head"><span class="badge go">GO →</span> 去程</div>
+          <div class="travel-body" id="outboundBody"></div>
+          <button class="icon-btn leg-edit" data-leg-edit="outbound" title="編輯">✎</button>
+        </div>
+        <div class="travel-item" data-leg="return">
+          <div class="travel-head"><span class="badge ret">← BACK</span> 回程</div>
+          <div class="travel-body" id="returnBody"></div>
+          <button class="icon-btn leg-edit" data-leg-edit="return" title="編輯">✎</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 日期分頁 -->
+    <div class="day-tabs" id="dayTabs"></div>
+
+    <!-- 景點時間軸 -->
+    <div class="timeline" id="timeline"></div>
+
+    <button class="btn btn-big" id="addSpotBtn">
+      <span>＋</span> 新增景點
+    </button>
+  </section>
+
+  <!-- ======== 側邊欄 ======== -->
+  <aside class="sidebar">
+    <!-- AI 建議 -->
+    <div class="card ai-card">
+      <div class="card-head">
+        <span class="emoji">🤖</span>
+        <h2>AI 小幫手</h2>
+        <span class="pill">預覽版</span>
+      </div>
+      <div class="ai-tips" id="aiTips"></div>
+      <div class="ai-btns">
+        <button class="btn btn-ghost" id="askAiBtn">✨ 重排這天</button>
+        <button class="btn btn-ghost" id="askAiAllBtn">🌐 重排整趟</button>
+      </div>
+      <button class="btn btn-ghost undo-ai" id="undoAiBtn" hidden>↩️ 還原 AI 上次的調整</button>
+    </div>
+
+    <!-- 錢包 -->
+    <div class="card wallet-card">
+      <div class="card-head">
+        <span class="emoji">💰</span>
+        <h2>旅費錢包</h2>
+      </div>
+      <div class="wallet-total">
+        <p class="label">目前總花費</p>
+        <p class="amount"><span id="totalAmount">0</span> <small>TWD</small></p>
+      </div>
+      <ul class="expense-list" id="expenseList"></ul>
+      <label class="btn btn-ghost upload-btn">
+        📷 匯入收據／發票
+        <input type="file" id="receiptInput" accept="image/*" hidden />
+      </label>
+    </div>
+
+    <!-- 行前準備（分類） -->
+    <div class="card prep-card">
+      <div class="card-head">
+        <span class="emoji">📝</span>
+        <h2>行前準備</h2>
+        <span class="pill-count" id="prepCount">0/0</span>
+      </div>
+      <button class="btn btn-ghost ai-prep-btn" id="aiPrepBtn">✨ AI 建議行前準備</button>
+      <div class="prep-categories" id="prepCategories"></div>
+      <button class="btn btn-ghost prep-add-cat" id="addCategoryBtn">＋ 新增分類</button>
+    </div>
+  </aside>
+</main>
+
+<!-- ======== 新增 / 編輯景點 Modal ======== -->
+<div class="modal" id="spotModal" hidden>
+  <div class="modal-box modal-wide">
+    <button class="close" data-close>✕</button>
+    <h3 id="spotModalTitle">📍 新增一個景點</h3>
+
+    <label>景點名稱 <small>(填完跳離欄位會自動查地址)</small>
+      <input type="text" id="spotName" placeholder="例如：清水寺" />
+    </label>
+
+    <label>分類
+      <div class="cat-picker" id="catPicker"></div>
+    </label>
+
+    <label>地址
+      <div class="addr-row">
+        <input type="text" id="spotAddr" placeholder="自動帶入 or 手動輸入" />
+        <button type="button" class="btn btn-ghost" id="lookupAddrBtn">🔍 查地址</button>
+      </div>
+      <small class="addr-hint" id="addrHint"></small>
+    </label>
+
+    <div class="row">
+      <label>開始時間
+        <input type="time" id="spotStart" value="09:00" />
+      </label>
+      <label>停留時間（分鐘）<small id="durHint"></small>
+        <input type="number" id="spotDur" value="90" min="0" step="15" />
+      </label>
+    </div>
+
+    <label>預估花費（TWD）
+      <input type="number" id="spotCost" value="0" min="0" />
+    </label>
+
+    <label>旅行照片 <small>(一張就好，會自動縮小)</small>
+      <div class="photo-uploader">
+        <div class="photo-preview" id="photoPreview"></div>
+        <label class="btn btn-ghost photo-btn">
+          📷 選擇照片
+          <input type="file" id="spotPhotoInput" accept="image/*" hidden />
+        </label>
+      </div>
+    </label>
+
+    <label>旅行小記 <small>(這個景點的回憶、感受、小提醒…)</small>
+      <textarea id="spotNote" rows="3" placeholder="例如：傍晚的光線超美，記得多拍幾張 🌅"></textarea>
+    </label>
+
+    <div class="actions">
+      <button class="btn btn-ghost" data-close>取消</button>
+      <button class="btn btn-primary" id="saveSpot">加進行程</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======== 去程 / 回程 Modal ======== -->
+<div class="modal" id="travelModal" hidden>
+  <div class="modal-box modal-wide">
+    <button class="close" data-close>✕</button>
+    <h3 id="travelModalTitle">✈️ 設定出發方式</h3>
+
+    <div class="row">
+      <label>交通方式
+        <select id="travelType">
+          <option>✈️ 飛機</option>
+          <option>🚄 高鐵 / 火車</option>
+          <option>🚌 長途巴士</option>
+          <option>🚢 郵輪 / 渡輪</option>
+          <option>🚗 自駕</option>
+          <option>🚶 其他</option>
+        </select>
+      </label>
+      <label>航班 / 車次 / 編號
+        <input type="text" id="travelNumber" placeholder="例：CI150" />
+      </label>
+    </div>
+
+    <div class="row">
+      <label>出發時間
+        <input type="text" id="travelDepart" placeholder="例：05/10 08:40" />
+      </label>
+      <label>出發地
+        <input type="text" id="travelDepFrom" placeholder="例：桃園機場 T1" />
+      </label>
+    </div>
+
+    <div class="row">
+      <label>抵達時間
+        <input type="text" id="travelArrive" placeholder="例：05/10 12:30" />
+      </label>
+      <label>抵達地
+        <input type="text" id="travelArrTo" placeholder="例：關西機場" />
+      </label>
+    </div>
+
+    <label>備註
+      <input type="text" id="travelNote" placeholder="例：座位 23A、記得提早到機場" />
+    </label>
+
+    <div class="actions">
+      <button class="btn btn-ghost" id="clearTravelBtn" style="margin-right:auto">清空</button>
+      <button class="btn btn-ghost" data-close>取消</button>
+      <button class="btn btn-primary" id="saveTravelBtn">儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======== 移動 / 複製景點到別天 Modal ======== -->
+<div class="modal" id="spotMoveModal" hidden>
+  <div class="modal-box">
+    <button class="close" data-close>✕</button>
+    <h3>📦 移動 / 複製景點</h3>
+    <p class="muted small" id="moveModalSpot"></p>
+
+    <div class="move-section">
+      <h4>📋 複製到別天 <small>(原本的還在)</small></h4>
+      <div class="day-button-list" id="copyDayList"></div>
+    </div>
+
+    <div class="move-section">
+      <h4>↗️ 移動到別天 <small>(從這天移走)</small></h4>
+      <div class="day-button-list" id="moveDayList"></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-ghost" data-close>取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======== 交通方式 Modal（支援多段轉乘） ======== -->
+<div class="modal" id="transitModal" hidden>
+  <div class="modal-box modal-wide">
+    <button class="close" data-close>✕</button>
+    <h3>🚦 編輯交通方式</h3>
+    <p class="muted small" id="transitFromTo"></p>
+    <p class="muted small">可以加多段（例如：先公車，再走路），AI 會幫你加總時間</p>
+
+    <div class="legs-list" id="legsList"></div>
+
+    <button class="btn btn-ghost add-leg-btn" id="addLegBtn">＋ 新增一段（轉乘 / 換交通工具）</button>
+
+    <p class="legs-total">
+      總交通時間：<b><span id="legsTotal">0</span> 分</b>
+      <span class="legs-total-divider">·</span>
+      預估費用：<b>💴 <span id="legsTotalCost">0</span> TWD</b>
+    </p>
+
+    <div class="actions">
+      <button class="btn btn-ghost" data-close>取消</button>
+      <button class="btn btn-primary" id="saveLegsBtn">儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======== 邀請 Modal ======== -->
+<div class="modal" id="inviteModal" hidden>
+  <div class="modal-box">
+    <button class="close" data-close>✕</button>
+    <h3>🔗 邀請朋友一起規劃</h3>
+    <p class="muted">把下面的連結貼給朋友，他們打開就能跟你一起編輯這本旅遊筆記～</p>
+    <div class="share-link">
+      <input type="text" id="shareLink" readonly />
+      <button class="btn btn-primary" id="copyLink">複製</button>
+    </div>
+    <p class="muted small">💡 正式版會接上即時同步服務（例如 Firebase / Supabase），大家改的內容會同步出現。</p>
+  </div>
+</div>
+
+<!-- ======== 列印專用區（平常隱藏，只有列印時出現） ======== -->
+<section id="printView" class="print-only"></section>
+
+<script src="storage.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
