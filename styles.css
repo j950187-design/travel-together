@@ -160,7 +160,7 @@ input { font-family: inherit; }
   background: white;
   border: 2px solid var(--line);
   border-radius: 14px;
-  padding: 10px 16px;
+  padding: 8px 14px;
   font-weight: 600;
   color: var(--ink-soft);
   display: flex;
@@ -169,6 +169,12 @@ input { font-family: inherit; }
   gap: 2px;
   font-size: 14px;
   transition: all .2s;
+  position: relative;
+}
+.day-tab-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .day-tab small { font-size: 11px; }
 .day-tab:hover { border-color: var(--peach); color: var(--peach-deep); }
@@ -186,6 +192,130 @@ input { font-family: inherit; }
   color: var(--peach-deep);
   justify-content: center;
 }
+
+/* ============================================================
+   📝 行前準備 — 子分類（prep-subcat）
+   ============================================================ */
+.prep-subcats-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.prep-subcat {
+  background: rgba(255,255,255,.6);
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.prep-subcat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed rgba(0,0,0,.06);
+  cursor: pointer;
+  user-select: none;
+}
+.prep-subcat-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  outline: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background .15s;
+}
+.prep-subcat-name:hover { background: #FFF3EC; }
+.prep-subcat-name:focus { background: white; box-shadow: 0 0 0 2px var(--peach); }
+.prep-subcat.collapsed .prep-list,
+.prep-subcat.collapsed .prep-add { display: none; }
+.prep-subcat.collapsed .prep-subcat-head { margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+.prep-add-subcat {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px !important;
+  padding: 6px !important;
+  border-style: dashed !important;
+  color: var(--ink-soft) !important;
+}
+/* 行前準備展開 Modal — 先橫向、再縱向 */
+.prep-modal-box {
+  width: min(960px, calc(100vw - 32px));
+  max-width: none !important;
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+}
+/* expanded modal grid layout */
+.prep-modal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.prep-modal-grid .prep-cat { margin: 0; }
+
+/* 購物清單 — 每個項目附加照片區域 */
+.shop-item-photo-toggle {
+  background: #F0F6FF !important;
+  color: #3A5BC7 !important;
+  font-size: 12px !important;
+}
+.shop-item-photo-toggle:hover { background: #D6E0FF !important; }
+.shop-item-photo-wrap {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  background: #F8F6F0;
+  border-radius: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.shop-item-photo-thumb {
+  width: 70px; height: 70px;
+  border-radius: 8px;
+  object-fit: cover;
+  box-shadow: 0 2px 4px rgba(0,0,0,.08);
+  flex-shrink: 0;
+}
+.shop-item-photo-label {
+  display: inline-block;
+  padding: 6px 12px;
+  background: white;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  transition: border .15s;
+}
+.shop-item-photo-label:hover { border-color: var(--peach); color: var(--peach-deep); }
+
+/* 天刪除按鈕 */
+.tab-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  background: rgba(0,0,0,.08);
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s, background .15s;
+  flex-shrink: 0;
+}
+.day-tab:hover .tab-del { opacity: 1; }
+.day-tab.active .tab-del { background: rgba(255,255,255,.3); }
+.tab-del:hover { background: rgba(200,0,0,.2) !important; opacity: 1 !important; }
 
 /* ---------- 時間軸卡片 ---------- */
 .timeline { display: flex; flex-direction: column; gap: 10px; }
@@ -376,6 +506,8 @@ input { font-family: inherit; }
   max-width: 440px;
   position: relative;
   box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
 }
 .modal-box h3 { margin-bottom: 16px; font-size: 19px; }
 .modal-box label {
@@ -669,6 +801,146 @@ input { font-family: inherit; }
 
 /* 景點 Modal 裡的照片上傳 */
 .modal-wide { max-width: 500px; }
+
+/* 多張照片 Gallery */
+.photo-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  margin-bottom: 8px;
+  min-height: 40px;
+}
+.photo-thumb-wrap {
+  position: relative;
+  width: 80px;
+  flex-shrink: 0;
+}
+.photo-thumb {
+  width: 80px; height: 80px;
+  border-radius: 10px;
+  object-fit: cover;
+  box-shadow: 0 2px 6px rgba(0,0,0,.08);
+  display: block;
+}
+.photo-thumb-del {
+  position: absolute;
+  top: -6px; right: -6px;
+  width: 20px; height: 20px;
+  background: rgba(59,58,71,.75);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  font-size: 10px;
+  cursor: pointer;
+  display: grid; place-items: center;
+  line-height: 1;
+}
+.photo-thumb-del:hover { background: #E0392D; }
+.photo-add-placeholder {
+  width: 80px; height: 80px;
+  border-radius: 10px;
+  border: 2px dashed var(--line);
+  background: #FAF6F0;
+  display: grid; place-items: center;
+  font-size: 24px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.photo-gallery-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin-top: 2px;
+}
+
+/* 景點購物 / 行動清單（modal 內） */
+.spot-shop-wrap {
+  margin-top: 6px;
+  background: #FFF8F0;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.spot-shop-list {
+  list-style: none;
+  padding: 0; margin: 0 0 6px;
+}
+.spot-shop-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 2px;
+  border-bottom: 1px dashed var(--line);
+}
+.spot-shop-item:last-child { border-bottom: none; }
+.spot-shop-item label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 !important;
+  font-size: 13.5px;
+  color: var(--ink);
+  font-weight: 500;
+  cursor: pointer;
+}
+.spot-shop-item input[type="checkbox"] {
+  width: 16px; height: 16px;
+  accent-color: var(--peach-deep);
+  flex-shrink: 0; margin: 0;
+  cursor: pointer;
+}
+.spot-shop-text { flex: 1; }
+.spot-shop-item.done .spot-shop-text {
+  text-decoration: line-through;
+  color: var(--ink-soft);
+}
+.spot-shop-add { display: flex; gap: 6px; }
+.spot-shop-add input {
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 2px solid var(--line);
+  font-size: 13px;
+  font-family: inherit;
+  background: white;
+}
+.spot-shop-add input:focus { outline: none; border-color: var(--peach); }
+.spot-shop-add .btn { padding: 7px 12px !important; }
+.spot-shop-empty { font-size: 12px; color: var(--ink-soft); padding: 4px 0; }
+
+/* 購物清單在景點卡片內顯示 */
+.spot-shop-card {
+  background: #FFF3EC;
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.spot-shop-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  letter-spacing: .5px;
+  margin-bottom: 2px;
+}
+.spot-shop-card-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.spot-shop-card-item.done > span { text-decoration: line-through; color: var(--ink-soft); }
+
+/* 多張照片在卡片內顯示 */
+.memory-photos {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.memory-photos .memory-photo { width: 90px; height: 90px; }
+
 .modal-box textarea {
   width: 100%;
   margin-top: 4px;
@@ -802,6 +1074,37 @@ input { font-family: inherit; }
 .leg-edit {
   position: absolute;
   top: 10px; right: 10px;
+}
+
+/* 出發/回程資訊旁的「自動設為第一/最後站」按鈕 */
+.travel-auto-btn {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px !important;
+  padding: 5px 12px !important;
+  border-color: var(--mint) !important;
+  color: #2F6B55 !important;
+  background: #EEF8F4 !important;
+}
+.travel-auto-btn:hover {
+  background: var(--mint) !important;
+  color: #1A4A38 !important;
+}
+
+/* 交通方式 Modal — Google Maps 連結按鈕 */
+.transit-maps-btn {
+  display: inline-block;
+  font-size: 13px !important;
+  padding: 7px 14px !important;
+  margin-bottom: 8px;
+  background: #EEF3FF !important;
+  border-color: #C5D3F8 !important;
+  color: #3A5BC7 !important;
+  text-decoration: none;
+}
+.transit-maps-btn:hover {
+  background: #D6E0FF !important;
+  color: #2244AA !important;
 }
 
 /* ============================================================
@@ -1114,6 +1417,191 @@ input { font-family: inherit; }
 }
 
 /* ============================================================
+   💱 多幣別 + 分帳
+   ============================================================ */
+.wallet-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.wallet-actions .icon-btn {
+  background: white;
+  font-size: 14px;
+}
+.wallet-actions .icon-btn:hover { background: var(--peach); color: white; }
+
+.wallet-bottom {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.wallet-bottom .btn { flex: 1; }
+.wallet-bottom .upload-btn { flex: 0 0 auto; }
+
+.wallet-total .amount { font-size: 28px; }
+
+/* mini avatar */
+.avatar.mini {
+  width: 22px; height: 22px;
+  font-size: 11px;
+  border-width: 2px;
+  margin-left: 0;
+  display: inline-grid;
+  place-items: center;
+  vertical-align: middle;
+}
+
+/* 分帳結算 */
+.settlement {
+  background: linear-gradient(135deg, #FFF8F0 0%, #FFF3EC 100%);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  border: 1.5px dashed var(--peach);
+}
+.settle-empty {
+  text-align: center;
+  color: #3C8D6A;
+  font-weight: 700;
+  padding: 4px 0;
+}
+.settle-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+  letter-spacing: 1px;
+}
+.settle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.settle-arrow { color: var(--peach-deep); font-weight: 700; }
+.settle-amt {
+  margin-left: auto;
+  background: var(--peach-deep);
+  color: white;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 12.5px;
+}
+
+/* 手動 / 自動 條目樣式 */
+.expense-list .manual-entry {
+  cursor: pointer;
+  border-bottom: 1px dashed var(--line);
+  padding: 8px 4px;
+}
+.expense-list .manual-entry:hover { background: #FFF8F0; }
+.expense-list .who {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.expense-list .conv {
+  display: block;
+  color: var(--ink-soft);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* 人員選擇按鈕（記帳 modal 內） */
+.paid-by-picker, .split-with-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.person-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #FAF6F0;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--ink);
+  transition: all .15s;
+}
+.person-pick:hover { background: white; }
+.person-pick.active {
+  background: white;
+  border-color: var(--c, var(--peach));
+  font-weight: 700;
+}
+
+/* 匯率列表 */
+.rates-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 12px 0 4px;
+}
+.rates-head h4 { margin: 0; font-size: 14px; }
+.btn-fetch-rates { padding: 6px 12px !important; font-size: 12px !important; }
+.rates-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 4px 8px;
+  margin-bottom: 12px;
+}
+.rate-row {
+  display: grid;
+  grid-template-columns: 1fr auto 90px 40px;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 4px;
+  border-bottom: 1px dashed var(--line);
+  font-size: 13px;
+}
+.rate-row:last-child { border-bottom: none; }
+.rate-ccy { font-weight: 600; }
+.rate-ccy small { color: var(--ink-soft); font-weight: 400; margin-left: 4px; }
+.rate-eq { color: var(--ink-soft); font-size: 12px; }
+.rate-input {
+  padding: 4px 6px !important;
+  border-radius: 6px !important;
+  font-size: 12.5px !important;
+  text-align: right;
+}
+.rate-twd { color: var(--ink-soft); font-size: 12px; }
+
+/* 成員管理 */
+.members-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: #FAF6F0;
+  border-radius: 10px;
+}
+.member-name {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1.5px solid var(--line);
+  background: white;
+  font-size: 13px;
+}
+.member-color {
+  width: 38px; height: 32px;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  background: white;
+}
+
+/* ============================================================
    ✨ AI 建議行前準備按鈕
    ============================================================ */
 .ai-prep-btn {
@@ -1240,7 +1728,38 @@ input { font-family: inherit; }
   margin-bottom: 6px;
   padding-bottom: 6px;
   border-bottom: 1px dashed rgba(0,0,0,.08);
+  cursor: pointer;
+  user-select: none;
 }
+.prep-toggle-btn {
+  background: none;
+  border: none;
+  font-size: 13px;
+  color: var(--ink-soft);
+  padding: 0 2px;
+  cursor: pointer;
+  transition: transform .2s;
+  flex-shrink: 0;
+}
+.prep-cat.collapsed .prep-toggle-btn { transform: rotate(-90deg); }
+.prep-cat.collapsed .prep-list,
+.prep-cat.collapsed .prep-add { display: none; }
+.prep-cat.collapsed { margin-bottom: 0; }
+.prep-cat.collapsed .prep-cat-head { margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+
+/* 行前準備展開 Modal */
+.prep-expand-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  font-size: 14px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: background .15s, color .15s;
+}
+.prep-expand-btn:hover { background: var(--cream); color: var(--ink); }
 .prep-cat-name {
   font-weight: 700;
   font-size: 14px;
@@ -1442,18 +1961,153 @@ input { font-family: inherit; }
   }
 }
 
-/* ---------- 小螢幕 ---------- */
-@media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; }
-  .topbar { flex-direction: column; gap: 14px; align-items: flex-start; }
+/* ============================================================
+   📱 響應式設計
+   - 電腦 (≥ 1024px) ：雙欄 layout，sidebar 固定右側
+   - 平板 (600–1024px)：單欄，sidebar 在下面，modal 稍縮小
+   - 手機 (< 600px)  ：全單欄，modal 從底部滑上，字體縮小
+   ============================================================ */
+
+/* 側邊欄的手機標題（平常隱藏，手機顯示） */
+.sidebar-mobile-label {
+  display: none;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  padding: 4px 0 2px;
+  border-top: 2px dashed var(--line);
+  margin-bottom: 4px;
+}
+@media (max-width: 1024px) {
+  .sidebar-mobile-label { display: block; }
+}
+
+/* ---------- 平板 (≤ 1024px) ---------- */
+@media (max-width: 1024px) {
+  .layout {
+    grid-template-columns: 1fr;
+    padding: 20px 24px 50px;
+  }
+  .topbar { padding: 16px 24px; }
+  .travel-grid { grid-template-columns: 1fr 1fr; }
+  .hero-text h1 { font-size: 28px; }
+  .hero-deco span { width: 70px; height: 70px; font-size: 44px; }
+
+  /* 側邊欄在平板上水平排列 */
+  .sidebar {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 20px;
+  }
+}
+
+/* ---------- 小平板 / 大手機 (≤ 768px) ---------- */
+@media (max-width: 768px) {
+  .layout { padding: 16px 18px 40px; gap: 16px; }
+  .topbar { flex-direction: column; gap: 10px; align-items: flex-start; padding: 14px 18px; }
+  .top-actions { width: 100%; justify-content: flex-start; }
+  .travel-grid { grid-template-columns: 1fr; }
+
   .spot-main { grid-template-columns: 70px 1fr; }
   .spot-actions { flex-direction: row; grid-column: 1 / -1; justify-content: flex-end; }
-  .hero-text h1 { font-size: 26px; }
-  .hero-deco span { width: 64px; height: 64px; font-size: 38px; }
-  .home-hero { padding: 40px 22px; }
-  .home-main { padding: 24px 20px; }
+
   .memory-photo { width: 90px; height: 90px; }
   .cover-picker { grid-template-columns: repeat(5, 1fr); }
+
+  .hero-text h1 { font-size: 24px; }
+  .hero-deco span { width: 60px; height: 60px; font-size: 36px; }
+  .home-hero { padding: 36px 20px; }
+  .home-main { padding: 22px 18px; }
+
+  /* 側邊欄改回單欄 */
+  .sidebar { display: flex; flex-direction: column; }
+}
+
+/* ---------- 手機 (≤ 600px) ---------- */
+@media (max-width: 600px) {
+  .layout { padding: 12px 12px 36px; gap: 12px; }
+
+  /* Topbar */
+  .topbar { padding: 12px 14px; gap: 8px; }
+  .brand { gap: 10px; }
+  .brand-icon { width: 42px; height: 42px; font-size: 24px; }
+  .brand h1 { font-size: 17px; }
+  .brand .sub { font-size: 12px; }
+  .back-btn { width: 34px; height: 34px; font-size: 17px; }
+  .top-actions { gap: 6px; flex-wrap: wrap; }
+  .top-actions .btn { font-size: 12px; padding: 7px 11px; }
+
+  /* Day 分頁 */
+  .day-tabs { gap: 5px; }
+  .day-tab { padding: 7px 11px; font-size: 13px; border-radius: 12px; }
+  .day-tab small { font-size: 10px; }
+  .tab-del { opacity: 1 !important; }   /* 手機常態顯示刪除鈕 */
+
+  /* 景點卡片 */
+  .spot-card { padding: 12px; gap: 10px; }
+  .spot-main { grid-template-columns: 64px 1fr; gap: 10px; }
+  .spot-time { padding: 8px 4px; }
+  .spot-time .start { font-size: 15px; }
+  .spot-time .dur { font-size: 10px; }
+  .spot-body h3 { font-size: 15px; }
+  .spot-body .addr { font-size: 12px; }
+  .spot-body .chips { gap: 4px; }
+  .chip { font-size: 11px; padding: 2px 8px; }
+
+  /* 照片記憶 */
+  .spot-memory { flex-direction: column; }
+  .memory-photo { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: cover; }
+
+  /* AI 按鈕群 */
+  .ai-btns { flex-direction: column; }
+  .ai-btns .btn { min-width: auto; }
+
+  /* 交通方塊 */
+  .transit { font-size: 12px; padding: 5px 12px 5px 32px; }
+  .transit::before { left: 18px; }
+
+  /* Modal：從底部滑上（bottom sheet 風格） */
+  .modal { padding: 0; align-items: flex-end; }
+  .modal-box {
+    border-radius: 24px 24px 0 0;
+    max-width: 100%;
+    width: 100%;
+    max-height: 92dvh;
+    overflow-y: auto;
+    padding: 20px 16px 32px;
+  }
+  .modal-box h3 { font-size: 17px; }
+  .modal-wide { max-width: 100%; }
+  .row { grid-template-columns: 1fr; }  /* 各欄在手機上改成單欄 */
+
+  /* 出行卡 */
   .travel-grid { grid-template-columns: 1fr; }
-  .top-actions { width: 100%; }
+  .travel-item { min-height: auto; }
+
+  /* 錢包 */
+  .wallet-total .amount { font-size: 24px; }
+  .wallet-bottom { flex-direction: column; }
+  .wallet-bottom .upload-btn { text-align: left; }
+  .rates-list { max-height: 240px; }
+  .rate-row { grid-template-columns: 1fr auto 70px 30px; }
+
+  /* 分帳結算 */
+  .settle-row { font-size: 12px; gap: 4px; }
+  .settle-amt { font-size: 11px; padding: 2px 8px; }
+
+  /* 行前準備 */
+  .prep-add { flex-wrap: wrap; }
+
+  /* 首頁 */
+  .home-hero { padding: 24px 14px; }
+  .hero-inner { flex-direction: column; gap: 16px; }
+  .hero-text h1 { font-size: 22px; }
+  .hero-text p { font-size: 14px; }
+  .hero-deco { display: none; }
+  .home-main { padding: 16px 12px; }
+  .section-head h2 { font-size: 18px; }
+  .trip-grid { grid-template-columns: 1fr; gap: 14px; }
+  .trip-info h3 { font-size: 15px; }
+  .home-actions { gap: 6px; }
+  .home-actions .btn { font-size: 13px; padding: 8px 14px; }
 }

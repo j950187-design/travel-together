@@ -32,23 +32,66 @@ state.days = state.days || { 1: [] };
 state.expenses = state.expenses || [];
 state.travel = state.travel || { outbound: null, return: null };
 
+// 同行夥伴 / 幣別 / 匯率（舊資料補上預設）
+state.people = state.people || [
+  { id: "p1", name: "我",   color: "#FFB5A7" },
+  { id: "p2", name: "小琪", color: "#B8E0D2" },
+  { id: "p3", name: "安安", color: "#FCD5CE" },
+];
+state.baseCurrency = state.baseCurrency || "TWD";
+state.rates = state.rates || {
+  TWD: 1, JPY: 4.78, USD: 0.032, KRW: 41.6, THB: 1.08,
+  EUR: 0.029, GBP: 0.025, HKD: 0.247, CNY: 0.227, SGD: 0.043,
+  VND: 778, AUD: 0.048,
+};
+
+// 舊版 expense 格式 { who, item, amt } → 新版 { id, paidBy, splitWith, ccy, amt, item }
+state.expenses = (state.expenses || []).map(e => {
+  if (!e.id) {
+    // 找對應的 paidBy id（用名字配對 state.people）
+    const person = state.people.find(p => p.name === e.who) || state.people[0];
+    return {
+      id: "e_" + Math.random().toString(36).slice(2, 8),
+      paidBy: e.paidBy || person.id,
+      splitWith: e.splitWith || state.people.map(p => p.id),
+      item: e.item,
+      amt: e.amt,
+      ccy: e.ccy || state.baseCurrency,
+    };
+  }
+  // 已有 id 的補充欄位
+  if (!e.ccy) e.ccy = state.baseCurrency;
+  if (!e.splitWith) e.splitWith = state.people.map(p => p.id);
+  if (!e.paidBy) e.paidBy = state.people[0].id;
+  return e;
+});
+
 // 行前準備：把舊的「平面陣列」格式遷移成「分類」格式
 if (Array.isArray(state.prep)) {
-  // 舊版可能是 [{id,text,done}, ...]，也可能已經是新版 [{id,name,items:[...]}]
-  const isLegacyFlat = state.prep.length > 0 && !("items" in state.prep[0]);
+  const isLegacyFlat = state.prep.length > 0 && !("items" in state.prep[0]) && !("subcats" in state.prep[0]);
   if (isLegacyFlat) {
-    state.prep = [{ id: "cat-default", name: "📋 待辦事項", items: state.prep }];
+    state.prep = [{ id: "cat-default", name: "📋 待辦事項", subcats: [{ id: "sub-all-cat-default", name: "📋 全部", items: state.prep }] }];
   }
 }
 if (!Array.isArray(state.prep) || state.prep.length === 0) {
   state.prep = [
-    { id: "cat-todo",    name: "📋 待辦事項", items: [] },
-    { id: "cat-packing", name: "🎒 行李清單", items: [] },
+    { id: "cat-todo",    name: "📋 待辦事項", subcats: [] },
+    { id: "cat-packing", name: "🎒 行李清單",  subcats: [] },
   ];
 }
-state.prep.forEach(c => { if (!c.items) c.items = []; });
+// 遷移 items → subcats（v2 格式）
+state.prep.forEach(c => {
+  if (!Array.isArray(c.subcats)) {
+    const oldItems = Array.isArray(c.items) ? c.items : [];
+    c.subcats = oldItems.length > 0
+      ? [{ id: "sub-all-" + c.id, name: "📋 全部", items: oldItems }]
+      : [];
+  }
+  c.subcats.forEach(sub => { if (!Array.isArray(sub.items)) sub.items = []; });
+  delete c.items; // 清掉舊欄位避免混淆
+});
 
-// 幫舊景點補上：分類、多段交通
+// 幫舊景點補上：分類、多段交通、照片陣列、購物清單
 Object.values(state.days).forEach(d => d.forEach(s => {
   if (!s.category) s.category = "sight";
   // 把舊版單段 travelMode/Mins 搬到新版 travelLegs
@@ -61,16 +104,28 @@ Object.values(state.days).forEach(d => d.forEach(s => {
     delete s.travelMode;
     delete s.travelMins;
   }
+  // 舊版 photo（單張字串）→ 新版 photos（陣列）
+  if (!Array.isArray(s.photos)) {
+    s.photos = s.photo ? [s.photo] : [];
+    delete s.photo;
+  }
+  // 購物 / 行動清單
+  if (!s.shopItems) s.shopItems = [];
 }));
 
 function persist() { saveTrip(TRIP_ID, state); }
 
-let nextSpotId = 1, nextPrepId = 1;
+let nextSpotId = 1, nextPrepId = 1, nextShopItemId = 1;
 Object.values(state.days).forEach(d =>
-  d.forEach(s => { if (s.id >= nextSpotId) nextSpotId = s.id + 1; })
+  d.forEach(s => {
+    if (s.id >= nextSpotId) nextSpotId = s.id + 1;
+    (s.shopItems || []).forEach(it => { if (it.id >= nextShopItemId) nextShopItemId = it.id + 1; });
+  })
 );
 state.prep.forEach(cat =>
-  cat.items.forEach(p => { if (p.id >= nextPrepId) nextPrepId = p.id + 1; })
+  (cat.subcats || []).forEach(sub =>
+    sub.items.forEach(p => { if (p.id >= nextPrepId) nextPrepId = p.id + 1; })
+  )
 );
 
 // ========== DOM 快取 ==========
@@ -80,7 +135,6 @@ const dayTabsEl    = $("dayTabs");
 const spotModal    = $("spotModal");
 const travelModal  = $("travelModal");
 const inviteModal  = $("inviteModal");
-const photoPreview = $("photoPreview");
 const aiTipsEl     = $("aiTips");
 const expenseListEl= $("expenseList");
 const titleEl      = $("tripTitleH1");
@@ -96,7 +150,32 @@ titleEl.addEventListener("input", () => {
 datesEl.addEventListener("input", () => {
   state.meta.dates = datesEl.textContent.trim();
   persist();
+  renderDayTabs(); // 重算每天的日期標籤
 });
+
+// ========== 日期工具 ==========
+const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
+
+function parseTripStartDate() {
+  const dates = state.meta.dates || "";
+  const m = dates.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (!m) return null;
+  return new Date(+m[1], +m[2] - 1, +m[3]);
+}
+
+function getDayLabel(dayNum) {
+  const start = parseTripStartDate();
+  if (!start) return null;
+  const d = new Date(start.getTime());
+  d.setDate(d.getDate() + dayNum - 1);
+  return `${d.getMonth() + 1}/${d.getDate()} (${WEEKDAY_ZH[d.getDay()]})`;
+}
+
+function parseTimeFromStr(str) {
+  const m = (str || "").match(/(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return `${m[1].padStart(2, "0")}:${m[2]}`;
+}
 
 // ========== 時間工具 ==========
 function toMinutes(hhmm) {
@@ -119,6 +198,40 @@ const SPOT_CATEGORIES = [
 ];
 function spotCat(id) {
   return SPOT_CATEGORIES.find(c => c.id === id) || SPOT_CATEGORIES[0];
+}
+
+// ========== 💱 幣別與匯率 ==========
+const CURRENCIES = [
+  { code: "TWD", symbol: "NT$", name: "新台幣" },
+  { code: "JPY", symbol: "¥",   name: "日圓" },
+  { code: "USD", symbol: "US$", name: "美金" },
+  { code: "KRW", symbol: "₩",   name: "韓元" },
+  { code: "THB", symbol: "฿",   name: "泰銖" },
+  { code: "EUR", symbol: "€",   name: "歐元" },
+  { code: "GBP", symbol: "£",   name: "英鎊" },
+  { code: "HKD", symbol: "HK$", name: "港幣" },
+  { code: "CNY", symbol: "¥",   name: "人民幣" },
+  { code: "SGD", symbol: "S$",  name: "新加坡元" },
+  { code: "VND", symbol: "₫",   name: "越南盾" },
+  { code: "AUD", symbol: "A$",  name: "澳元" },
+];
+function ccyInfo(code) {
+  return CURRENCIES.find(c => c.code === code) || { code, symbol: code, name: code };
+}
+// rates[X] 的語意：1 TWD = rates[X] 個 X 幣
+// 公式：amount * rates[to] / rates[from]
+function convertAmount(amt, fromCcy, toCcy, rates = state.rates) {
+  if (!fromCcy || !toCcy || fromCcy === toCcy) return amt;
+  const f = rates[fromCcy], t = rates[toCcy];
+  if (!f || !t) return amt;
+  return (amt * t) / f;
+}
+function formatMoney(amt, ccy) {
+  const info = ccyInfo(ccy);
+  return `${info.symbol} ${Math.round(amt).toLocaleString()}`;
+}
+function getPerson(id) {
+  return state.people.find(p => p.id === id) || { id, name: "?", color: "#ccc" };
 }
 
 // ========== 交通時間估算（多段轉乘） ==========
@@ -193,19 +306,63 @@ function renderDayTabs() {
   const days = Object.keys(state.days).map(Number).sort((a, b) => a - b);
   dayTabsEl.innerHTML = "";
   days.forEach(d => {
+    const label = getDayLabel(d);
+    const canDelete = days.length > 1;
     const btn = document.createElement("button");
     btn.className = "day-tab" + (d === state.currentDay ? " active" : "");
     btn.dataset.day = d;
-    btn.innerHTML = `Day ${d}`;
+    btn.innerHTML = `
+      <span class="day-tab-top">
+        <span>Day ${d}</span>
+        ${canDelete ? `<span class="tab-del" data-del-day="${d}" title="刪除第 ${d} 天">×</span>` : ""}
+      </span>
+      ${label ? `<small>${label}</small>` : ""}
+    `;
     dayTabsEl.appendChild(btn);
   });
   const addBtn = document.createElement("button");
   addBtn.className = "day-tab add";
   addBtn.id = "addDayBtn";
+  addBtn.title = "新增一天";
   addBtn.textContent = "＋";
   dayTabsEl.appendChild(addBtn);
 }
+
+function deleteDay(dayKey) {
+  const days = Object.keys(state.days).map(Number).sort((a, b) => a - b);
+  if (days.length <= 1) { alert("至少要留一天喔！"); return; }
+  const spotCount = (state.days[dayKey] || []).length;
+  const msg = spotCount > 0
+    ? `真的要刪除 Day ${dayKey} 嗎？\n這天還有 ${spotCount} 個景點，一起消失了 🥲`
+    : `真的要刪除 Day ${dayKey} 嗎？`;
+  if (!confirm(msg)) return;
+
+  delete state.days[dayKey];
+
+  // 重新連續編號（避免 Day 1,3,4 這種間斷）
+  const remaining = Object.keys(state.days).map(Number).sort((a, b) => a - b);
+  const newDays = {};
+  remaining.forEach((oldKey, i) => { newDays[i + 1] = state.days[oldKey]; });
+  state.days = newDays;
+
+  // currentDay 超出範圍就夾到最大天
+  const maxDay = Math.max(...Object.keys(state.days).map(Number));
+  if (state.currentDay > maxDay) state.currentDay = maxDay;
+  // 若刪的是當前天，顯示前一天或第一天
+  if (!state.days[state.currentDay]) state.currentDay = 1;
+
+  persist();
+  renderAll();
+}
+
 dayTabsEl.addEventListener("click", e => {
+  // 點到刪除按鈕
+  const delBtn = e.target.closest("[data-del-day]");
+  if (delBtn) {
+    e.stopPropagation();
+    deleteDay(+delBtn.dataset.delDay);
+    return;
+  }
   const tab = e.target.closest(".day-tab");
   if (!tab) return;
   if (tab.id === "addDayBtn") {
@@ -282,7 +439,9 @@ function buildSpotCard(spot, idx, total) {
 
   const mapQuery = encodeURIComponent(spot.addr || spot.name);
   const mapUrl = `https://www.google.com/maps/search/?api=1&query=${mapQuery}`;
-  const hasMemory = !!(spot.photo || spot.note);
+  const photos = Array.isArray(spot.photos) ? spot.photos : [];
+  const shopItems = Array.isArray(spot.shopItems) ? spot.shopItems : [];
+  const hasMemory = !!(photos.length || spot.note || shopItems.length);
 
   card.innerHTML = `
     <div class="spot-main">
@@ -301,7 +460,8 @@ function buildSpotCard(spot, idx, total) {
           <a class="chip map" href="${mapUrl}" target="_blank" rel="noopener"
              onclick="event.stopPropagation()">🗺️ 開地圖</a>
           ${spot.cost > 0 ? `<span class="chip cost">💴 ${spot.cost} TWD</span>` : ""}
-          ${spot.photo ? `<span class="chip photo-chip">📷</span>` : ""}
+          ${photos.length > 0 ? `<span class="chip photo-chip">📷 ${photos.length}</span>` : ""}
+          ${shopItems.length > 0 ? `<span class="chip" style="background:#E8F6EE;color:#2F6B55;">🛍️ ${shopItems.filter(i=>i.done).length}/${shopItems.length}</span>` : ""}
         </div>
       </div>
       <div class="spot-actions">
@@ -313,8 +473,19 @@ function buildSpotCard(spot, idx, total) {
     </div>
     ${hasMemory ? `
       <div class="spot-memory">
-        ${spot.photo ? `<img class="memory-photo" src="${spot.photo}" alt="旅行照片" />` : ""}
+        ${photos.length > 0 ? `<div class="memory-photos">${photos.map(p => `<img class="memory-photo" src="${p}" alt="旅行照片" />`).join("")}</div>` : ""}
         ${spot.note ? `<p class="memory-note">${escapeHtml(spot.note)}</p>` : ""}
+      </div>
+    ` : ""}
+    ${shopItems.length > 0 ? `
+      <div class="spot-shop-card">
+        <div class="spot-shop-card-title">🛍️ 購物 / 行動清單</div>
+        ${shopItems.map(it => `
+          <div class="spot-shop-card-item ${it.done ? "done" : ""}">
+            <span>${it.done ? "☑" : "☐"}</span>
+            <span>${escapeHtml(it.text)}</span>
+          </div>
+        `).join("")}
       </div>
     ` : ""}
   `;
@@ -622,6 +793,15 @@ function openTransitEditor(fromSpot) {
   $("transitFromTo").innerHTML =
     `從「<b>${escapeHtml(fromSpot.name)}</b>」到「<b>${escapeHtml(toSpot.name)}</b>」`;
 
+  // Google Maps 路線連結
+  const fromQ = encodeURIComponent((fromSpot.addr || fromSpot.name).trim());
+  const toQ   = encodeURIComponent((toSpot.addr  || toSpot.name).trim());
+  const mapsLink = $("transitMapsLink");
+  if (mapsLink) {
+    mapsLink.href = `https://www.google.com/maps/dir/${fromQ}/${toQ}`;
+    mapsLink.hidden = false;
+  }
+
   // 載入目前的 legs（深複製，按取消才不會改到原本的）
   const current = getTransit(fromSpot, toSpot);
   workingLegs = current.legs.map(l => ({ ...l }));
@@ -729,7 +909,8 @@ $("saveLegsBtn").addEventListener("click", () => {
 // 新增 / 編輯 景點 Modal
 // ============================================================
 let editingSpotId = null;
-let tempPhoto = "";
+let tempPhotos = [];    // 編輯中的照片陣列（最多 3 張）
+let tempShopItems = []; // 編輯中的購物清單
 let chosenCategory = "sight";
 
 // 建構分類選擇器
@@ -784,8 +965,10 @@ function openSpotModalForEdit(id) {
   $("spotCost").value = spot.cost || 0;
   $("spotNote").value = spot.note || "";
   setCategory(spot.category || "sight");
-  tempPhoto = spot.photo || "";
-  renderPhotoPreview();
+  tempPhotos = Array.isArray(spot.photos) ? [...spot.photos] : [];
+  tempShopItems = (spot.shopItems || []).map(it => ({ photo: "", ...it }));
+  renderPhotoGallery();
+  renderSpotShopList();
   $("addrHint").textContent = "";
   spotModal.hidden = false;
 }
@@ -799,57 +982,194 @@ function resetSpotForm() {
   $("spotNote").value = "";
   $("addrHint").textContent = "";
   setCategory("sight");
-  tempPhoto = "";
-  renderPhotoPreview();
+  tempPhotos = [];
+  tempShopItems = [];
+  renderPhotoGallery();
+  renderSpotShopList();
   $("spotPhotoInput").value = "";
 }
 
-function renderPhotoPreview() {
-  if (tempPhoto) {
-    photoPreview.innerHTML = `
-      <img src="${tempPhoto}" alt="預覽" />
-      <button type="button" class="photo-remove" id="removePhotoBtn">✕ 移除</button>`;
-    $("removePhotoBtn").addEventListener("click", () => {
-      tempPhoto = "";
-      $("spotPhotoInput").value = "";
-      renderPhotoPreview();
+const MAX_PHOTOS = 3;
+
+function renderPhotoGallery() {
+  const gallery = $("photoGallery");
+  const hint = $("photoGalleryHint");
+  if (!gallery) return;
+  // 保留 input 元素，清掉其他
+  const fileInput = $("spotPhotoInput");
+  gallery.innerHTML = "";
+  if (fileInput) gallery.appendChild(fileInput);
+
+  tempPhotos.forEach((src, i) => {
+    const wrap = document.createElement("div");
+    wrap.className = "photo-thumb-wrap";
+    wrap.innerHTML = `
+      <img class="photo-thumb" src="${src}" alt="照片 ${i+1}" />
+      <button type="button" class="photo-thumb-del" data-idx="${i}" title="移除這張">✕</button>
+    `;
+    wrap.querySelector(".photo-thumb-del").addEventListener("click", () => {
+      tempPhotos.splice(i, 1);
+      renderPhotoGallery();
     });
-  } else {
-    photoPreview.innerHTML = `<div class="photo-placeholder">📷 尚未選擇照片</div>`;
+    gallery.appendChild(wrap);
+  });
+
+  // 相機圖示 = 新增照片觸發器（如果還沒滿）
+  if (tempPhotos.length < MAX_PHOTOS) {
+    const addTrigger = document.createElement("label");
+    addTrigger.className = "photo-add-placeholder";
+    addTrigger.title = "點擊新增照片";
+    addTrigger.htmlFor = "spotPhotoInput";
+    addTrigger.textContent = "📷";
+    gallery.appendChild(addTrigger);
   }
+
+  if (hint) {
+    hint.textContent = tempPhotos.length > 0
+      ? `已選 ${tempPhotos.length} / ${MAX_PHOTOS} 張${tempPhotos.length >= MAX_PHOTOS ? "（已達上限）" : ""}`
+      : `點相機圖示新增，最多 ${MAX_PHOTOS} 張`;
+  }
+}
+
+function renderSpotShopList() {
+  const ul = $("spotShopList");
+  if (!ul) return;
+  ul.innerHTML = "";
+  if (tempShopItems.length === 0) {
+    ul.innerHTML = `<li class="spot-shop-empty">（尚未新增，在下方輸入後按 ＋）</li>`;
+    return;
+  }
+  tempShopItems.forEach((it, i) => {
+    const li = document.createElement("li");
+    li.className = "spot-shop-item" + (it.done ? " done" : "");
+    // photo area（預設隱藏）
+    const hasPhoto = !!it.photo;
+    li.innerHTML = `
+      <label>
+        <input type="checkbox" ${it.done ? "checked" : ""} />
+        <span class="spot-shop-text">${escapeHtml(it.text)}</span>
+      </label>
+      <button type="button" class="shop-item-photo-toggle icon-btn tiny" title="附加照片">📷</button>
+      <button type="button" class="icon-btn tiny del" title="刪除">✕</button>
+      <div class="shop-item-photo-wrap" hidden>
+        ${hasPhoto ? `<img class="shop-item-photo-thumb" src="${it.photo}" alt="附圖" />` : ""}
+        <label class="shop-item-photo-label">
+          ${hasPhoto ? "🔄 換一張" : "📷 上傳照片"}
+          <input type="file" accept="image/*" class="shop-item-photo-input" hidden />
+        </label>
+        ${hasPhoto ? `<button type="button" class="shop-item-photo-del btn btn-ghost" style="font-size:11px;padding:4px 8px;">🗑 移除</button>` : ""}
+      </div>
+    `;
+    // 打勾
+    li.querySelector("input[type=checkbox]").addEventListener("change", e => {
+      tempShopItems[i].done = e.target.checked;
+      li.classList.toggle("done", e.target.checked);
+    });
+    // 刪除項目
+    li.querySelector(".del").addEventListener("click", () => {
+      tempShopItems.splice(i, 1);
+      renderSpotShopList();
+    });
+    // 展開 / 收合照片區
+    const photoWrap = li.querySelector(".shop-item-photo-wrap");
+    li.querySelector(".shop-item-photo-toggle").addEventListener("click", () => {
+      photoWrap.hidden = !photoWrap.hidden;
+    });
+    // 上傳照片
+    li.querySelector(".shop-item-photo-input").addEventListener("change", async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        tempShopItems[i].photo = await fileToResizedDataURL(file, 600);
+        renderSpotShopList();
+      } catch { alert("😢 讀取照片失敗"); }
+      e.target.value = "";
+    });
+    // 移除照片
+    const delPhotoBtn = li.querySelector(".shop-item-photo-del");
+    if (delPhotoBtn) {
+      delPhotoBtn.addEventListener("click", () => {
+        tempShopItems[i].photo = "";
+        renderSpotShopList();
+      });
+    }
+    ul.appendChild(li);
+  });
 }
 
 $("spotPhotoInput").addEventListener("change", async e => {
   const file = e.target.files[0];
   if (!file) return;
+  if (tempPhotos.length >= MAX_PHOTOS) {
+    alert(`最多只能上傳 ${MAX_PHOTOS} 張照片喔！`);
+    return;
+  }
   try {
-    tempPhoto = await fileToResizedDataURL(file, 800);
-    renderPhotoPreview();
+    const dataUrl = await fileToResizedDataURL(file, 800);
+    tempPhotos.push(dataUrl);
+    renderPhotoGallery();
   } catch {
     alert("😢 讀取照片失敗，換一張試試？");
   }
+  e.target.value = "";
 });
 
-// ---- 地址自動查詢（OpenStreetMap Nominatim，免費、無須金鑰） ----
+// 購物清單新增
+function addShopItem() {
+  const input = $("spotShopInput");
+  const text = input.value.trim();
+  if (!text) return;
+  tempShopItems.push({ id: nextShopItemId++, text, done: false, photo: "" });
+  input.value = "";
+  renderSpotShopList();
+}
+$("spotShopAddBtn").addEventListener("click", addShopItem);
+$("spotShopInput").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addShopItem(); } });
+
+// ---- 地址自動查詢 ----
+// 策略：先試 Photon（komoot，CORS 友好、日文效果佳），再試 Nominatim
 async function lookupAddress(query) {
   const hintEl = $("addrHint");
   hintEl.textContent = "🔍 查詢中…";
+  hintEl.style.color = "";
+
+  // 1️⃣ Photon (komoot) — 免費、CORS 支援好
   try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&accept-language=zh-TW`;
-    const res = await fetch(url);
+    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=1&lang=zh`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const data = await res.json();
+    if (data.features && data.features[0]) {
+      const p = data.features[0].properties;
+      const parts = [p.name, p.street && p.housenumber ? `${p.street} ${p.housenumber}` : (p.street || ""),
+                     p.district, p.city, p.state, p.country].filter(Boolean);
+      // 若第一個 name 跟查詢相同，就不重複顯示
+      const addr = [...new Set(parts)].join(", ");
+      if (addr) {
+        $("spotAddr").value = addr;
+        hintEl.textContent = "✅ 已帶入地址（來源：OpenStreetMap），可再手動調整";
+        hintEl.style.color = "#3C8D6A";
+        return;
+      }
+    }
+  } catch {}
+
+  // 2️⃣ Nominatim fallback
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&accept-language=zh-TW,zh`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     const data = await res.json();
     if (data && data[0]) {
       $("spotAddr").value = data[0].display_name;
-      hintEl.textContent = "✅ 已自動帶入地址，可再手動調整";
+      hintEl.textContent = "✅ 已帶入地址（來源：Nominatim），可再手動調整";
       hintEl.style.color = "#3C8D6A";
-    } else {
-      hintEl.textContent = "😅 查不到，手動輸入即可";
-      hintEl.style.color = "#C26B4A";
+      return;
     }
-  } catch (err) {
-    hintEl.textContent = "⚠️ 查詢失敗（網路或 CORS）— 手動輸入即可";
-    hintEl.style.color = "#C26B4A";
-  }
+  } catch {}
+
+  // 兩個都失敗 → 提示用 Google Maps 複製
+  const gUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
+  hintEl.innerHTML = `😅 自動查不到，請 <a href="${gUrl}" target="_blank" rel="noopener" style="color:#3A5BC7">開 Google Maps</a> 手動複製地址`;
+  hintEl.style.color = "#C26B4A";
 }
 
 // 離開景點名稱欄位 → 若地址空，自動查
@@ -858,9 +1178,14 @@ $("spotName").addEventListener("blur", () => {
   const addr = $("spotAddr").value.trim();
   if (name && !addr) lookupAddress(name);
 });
+// 「查地址」按鈕 → 永遠用景點名稱查（不用地址欄位的值）
 $("lookupAddrBtn").addEventListener("click", () => {
-  const q = $("spotAddr").value.trim() || $("spotName").value.trim();
+  const q = $("spotName").value.trim();
   if (q) lookupAddress(q);
+  else {
+    $("addrHint").textContent = "請先填入景點名稱再查詢";
+    $("addrHint").style.color = "#C26B4A";
+  }
 });
 
 // ---- 存景點 ----
@@ -875,7 +1200,8 @@ $("saveSpot").addEventListener("click", () => {
     dur: Math.max(0, +$("spotDur").value || 0),
     cost: +$("spotCost").value,
     note: $("spotNote").value.trim(),
-    photo: tempPhoto || "",
+    photos: [...tempPhotos],
+    shopItems: tempShopItems.map(it => ({ ...it })),
     category: chosenCategory,
   };
 
@@ -893,7 +1219,7 @@ $("saveSpot").addEventListener("click", () => {
       travelLegs: null,
     });
     changedIdx = list.length - 1;
-    if (data.cost > 0) state.expenses.push({ who: "我", item: data.name, amt: data.cost });
+    // 景點費用已透過「自動：景點門票」顯示，不需另存進 expenses 避免重複計算
   }
   // 新增／改了景點後，時間從這個點往後連動
   cascadeTimes(changedIdx + 1);
@@ -913,13 +1239,80 @@ function renderTravel() {
       body.innerHTML = `<span class="muted">點右側「✎」新增${leg === "outbound" ? "出發" : "回程"}方式</span>`;
       return;
     }
+    // 出發：到達地點 → 設為 Day 1 第一站；回程：出發地 → 設為最後一天最後一站
+    const autoPoint = leg === "outbound" ? data.arriveTo : data.departFrom;
+    const autoLabel = leg === "outbound" ? "📍 設為 Day 1 第一站" : "📍 設為最後一站";
+
     body.innerHTML = `
       <div class="travel-line"><b>${escapeHtml(data.type || "")}</b> ${escapeHtml(data.number || "")}</div>
       <div class="travel-line">🛫 ${escapeHtml(data.departAt || "")} <small>${escapeHtml(data.departFrom || "")}</small></div>
       <div class="travel-line">🛬 ${escapeHtml(data.arriveAt || "")} <small>${escapeHtml(data.arriveTo || "")}</small></div>
       ${data.note ? `<div class="travel-note">📝 ${escapeHtml(data.note)}</div>` : ""}
+      ${autoPoint ? `<button class="btn btn-ghost travel-auto-btn" data-auto-leg="${leg}">${autoLabel}</button>` : ""}
     `;
+
+    if (autoPoint) {
+      body.querySelector("[data-auto-leg]").addEventListener("click", () =>
+        autoSetTravelSpot(leg, autoPoint, data)
+      );
+    }
   });
+}
+
+function autoSetTravelSpot(leg, point, travelData) {
+  if (leg === "outbound") {
+    if (!state.days[1]) state.days[1] = [];
+    const day1 = state.days[1];
+    if (day1[0]?.name === point) {
+      alert(`Day 1 的第一站已經是「${point}」了 ✅`); return;
+    }
+    const arriveTime = parseTimeFromStr(travelData?.arriveAt) || "12:00";
+    const newSpot = {
+      id: nextSpotId++,
+      name: point,
+      category: "other",
+      addr: point,
+      start: arriveTime,
+      dur: 0,
+      cost: 0,
+      photo: "",
+      note: `✈️ 抵達 ${point}`,
+      travelLegs: null,
+    };
+    day1.unshift(newSpot);
+    cascadeTimesForDay(1, 1);
+    state.currentDay = 1;
+    persist();
+    renderAll();
+    alert(`✅ 已將「${point}」加為 Day 1 第一站！`);
+  } else {
+    const days = Object.keys(state.days).map(Number).sort((a, b) => a - b);
+    const lastKey = days[days.length - 1];
+    const lastDay = state.days[lastKey] || [];
+    if (lastDay[lastDay.length - 1]?.name === point) {
+      alert(`最後一天的最後一站已經是「${point}」了 ✅`); return;
+    }
+    const prev = lastDay[lastDay.length - 1];
+    const startTime = prev
+      ? toHHMM(toMinutes(prev.start) + (prev.dur || 0) + 30)
+      : parseTimeFromStr(travelData?.departAt) || "18:00";
+    state.days[lastKey].push({
+      id: nextSpotId++,
+      name: point,
+      category: "other",
+      addr: point,
+      start: startTime,
+      dur: 0,
+      cost: 0,
+      photo: "",
+      note: `✈️ 從 ${point} 回程出發`,
+      travelLegs: null,
+    });
+    state.currentDay = lastKey;
+    persist();
+    renderAll();
+    alert(`✅ 已將「${point}」加為最後一天的最後一站！`);
+  }
 }
 
 let editingLeg = null;
@@ -969,73 +1362,65 @@ $("clearTravelBtn").addEventListener("click", () => {
 // 行前準備清單（分類版）
 // ============================================================
 const prepCatsEl = $("prepCategories");
+// 記錄哪些分類是折疊狀態（key = cat.id）
+const collapsedCats = new Set();
 
 function renderPrep() {
-  prepCatsEl.innerHTML = "";
+  const containers = [prepCatsEl, $("prepCategoriesExpanded")].filter(Boolean);
   let total = 0, done = 0;
-  state.prep.forEach(cat => {
-    cat.items.forEach(it => { total++; if (it.done) done++; });
-    prepCatsEl.appendChild(buildCategorySection(cat));
-  });
+  state.prep.forEach(cat =>
+    (cat.subcats || []).forEach(sub =>
+      (sub.items || []).forEach(it => { total++; if (it.done) done++; })
+    )
+  );
   $("prepCount").textContent = `${done}/${total}`;
+
+  containers.forEach(container => {
+    container.innerHTML = "";
+    const isCompact = container === prepCatsEl; // 側邊欄才折疊
+    state.prep.forEach(cat => {
+      container.appendChild(buildCategorySection(cat, isCompact));
+    });
+  });
 }
 
-function buildCategorySection(cat) {
+function buildCategorySection(cat, collapsible = true) {
   const section = document.createElement("div");
-  section.className = "prep-cat";
-  const doneN = cat.items.filter(i => i.done).length;
+  const isCollapsed = collapsible && collapsedCats.has(cat.id);
+  section.className = "prep-cat" + (isCollapsed ? " collapsed" : "");
+
+  // 統計所有子分類的完成數
+  const allItems = (cat.subcats || []).flatMap(s => s.items || []);
+  const doneN = allItems.filter(i => i.done).length;
+
   section.innerHTML = `
     <div class="prep-cat-head">
+      ${collapsible ? `<button class="prep-toggle-btn" title="展開 / 收合">▾</button>` : ""}
       <span class="prep-cat-name" contenteditable="true" spellcheck="false"
             data-cat-rename="${cat.id}">${escapeHtml(cat.name)}</span>
-      <span class="prep-cat-count">${doneN}/${cat.items.length}</span>
+      <span class="prep-cat-count">${doneN}/${allItems.length}</span>
       <button class="icon-btn tiny del" data-cat-del="${cat.id}" title="刪除整個分類">✕</button>
     </div>
-    <ul class="prep-list">
-      ${cat.items.map(it => `
-        <li class="prep-item ${it.done ? "done" : ""}">
-          <label>
-            <input type="checkbox" data-prep-toggle="${it.id}" data-cat="${cat.id}" ${it.done ? "checked" : ""} />
-            <span class="prep-text" contenteditable="true" spellcheck="false"
-                  data-prep-edit="${it.id}" data-cat="${cat.id}">${escapeHtml(it.text)}</span>
-          </label>
-          <button class="icon-btn tiny del" data-prep-del="${it.id}" data-cat="${cat.id}" title="刪除">✕</button>
-        </li>
-      `).join("")}
-    </ul>
-    <div class="prep-add">
-      <input type="text" data-cat-add="${cat.id}" placeholder="新增一項…" />
-      <button class="btn btn-primary tiny" data-cat-add-btn="${cat.id}">＋</button>
-    </div>
+    <div class="prep-subcats-wrap"></div>
+    <button class="btn btn-ghost prep-add-subcat" data-add-sub="${cat.id}" title="新增子分類">＋ 新增子分類</button>
   `;
 
-  // ----- 事件繫結 -----
-  // 打勾
-  section.querySelectorAll("[data-prep-toggle]").forEach(chk => {
-    chk.addEventListener("change", () => {
-      const c = state.prep.find(x => x.id === chk.dataset.cat);
-      const it = c?.items.find(i => i.id === +chk.dataset.prepToggle);
-      if (it) { it.done = chk.checked; persist(); renderPrep(); }
+  // 折疊 toggle（點標題列）
+  if (collapsible) {
+    const head = section.querySelector(".prep-cat-head");
+    head.addEventListener("click", e => {
+      if (e.target.closest("[data-cat-del]") || e.target.closest("[data-cat-rename]")) return;
+      collapsedCats.has(cat.id) ? collapsedCats.delete(cat.id) : collapsedCats.add(cat.id);
+      section.classList.toggle("collapsed", collapsedCats.has(cat.id));
     });
+  }
+
+  // 渲染子分類
+  const subcatsWrap = section.querySelector(".prep-subcats-wrap");
+  (cat.subcats || []).forEach(sub => {
+    subcatsWrap.appendChild(buildSubcatSection(sub, cat));
   });
-  // 文字編輯（離開欄位儲存）
-  section.querySelectorAll("[data-prep-edit]").forEach(span => {
-    span.addEventListener("blur", () => {
-      const c = state.prep.find(x => x.id === span.dataset.cat);
-      const it = c?.items.find(i => i.id === +span.dataset.prepEdit);
-      if (it) { it.text = span.textContent.trim() || it.text; persist(); }
-    });
-  });
-  // 刪單一項
-  section.querySelectorAll("[data-prep-del]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const c = state.prep.find(x => x.id === btn.dataset.cat);
-      if (!c) return;
-      c.items = c.items.filter(i => i.id !== +btn.dataset.prepDel);
-      persist();
-      renderPrep();
-    });
-  });
+
   // 改分類名稱
   section.querySelector("[data-cat-rename]").addEventListener("blur", e => {
     const txt = e.target.textContent.trim();
@@ -1043,27 +1428,125 @@ function buildCategorySection(cat) {
   });
   // 刪整個分類
   section.querySelector("[data-cat-del]").addEventListener("click", () => {
-    if (!confirm(`刪除「${cat.name}」整個分類嗎？所有項目會一起消失 🥲`)) return;
+    if (!confirm(`刪除「${cat.name}」整個分類嗎？所有子分類和項目會一起消失 🥲`)) return;
     state.prep = state.prep.filter(x => x.id !== cat.id);
     persist();
     renderPrep();
   });
-  // 新增項目（這個分類底下）
-  const addInput = section.querySelector("[data-cat-add]");
-  const addBtn   = section.querySelector("[data-cat-add-btn]");
+  // 新增子分類
+  section.querySelector("[data-add-sub]").addEventListener("click", () => {
+    const name = prompt("子分類名稱（建議加 emoji）", "✨ 其他");
+    if (!name || !name.trim()) return;
+    cat.subcats = cat.subcats || [];
+    cat.subcats.push({ id: "sub-" + Date.now(), name: name.trim(), items: [] });
+    persist();
+    renderPrep();
+  });
+
+  return section;
+}
+
+function buildSubcatSection(sub, parentCat) {
+  const section = document.createElement("div");
+  const colKey = parentCat.id + "/" + sub.id;
+  const isCollapsed = collapsedCats.has(colKey);
+  section.className = "prep-subcat" + (isCollapsed ? " collapsed" : "");
+
+  const doneN = (sub.items || []).filter(i => i.done).length;
+  section.innerHTML = `
+    <div class="prep-subcat-head">
+      <button class="prep-toggle-btn" title="展開 / 收合">▾</button>
+      <span class="prep-subcat-name" contenteditable="true" spellcheck="false">${escapeHtml(sub.name)}</span>
+      <span class="prep-cat-count">${doneN}/${sub.items.length}</span>
+      <button class="icon-btn tiny del prep-sub-del" title="刪除子分類">✕</button>
+    </div>
+    <ul class="prep-list">
+      ${(sub.items || []).map(it => `
+        <li class="prep-item ${it.done ? "done" : ""}">
+          <label>
+            <input type="checkbox" data-sub-toggle="${it.id}" ${it.done ? "checked" : ""} />
+            <span class="prep-text" contenteditable="true" spellcheck="false"
+                  data-sub-edit="${it.id}">${escapeHtml(it.text)}</span>
+          </label>
+          <button class="icon-btn tiny del" data-sub-del="${it.id}" title="刪除">✕</button>
+        </li>
+      `).join("")}
+    </ul>
+    <div class="prep-add">
+      <input type="text" class="sub-add-input" placeholder="新增一項…" />
+      <button class="btn btn-primary tiny sub-add-btn">＋</button>
+    </div>
+  `;
+
+  // 折疊
+  section.querySelector(".prep-subcat-head").addEventListener("click", e => {
+    if (e.target.closest(".prep-sub-del") || e.target.closest("[contenteditable]")) return;
+    collapsedCats.has(colKey) ? collapsedCats.delete(colKey) : collapsedCats.add(colKey);
+    section.classList.toggle("collapsed", collapsedCats.has(colKey));
+  });
+
+  // 打勾
+  section.querySelectorAll("[data-sub-toggle]").forEach(chk => {
+    chk.addEventListener("change", () => {
+      const it = sub.items.find(i => i.id === +chk.dataset.subToggle);
+      if (it) { it.done = chk.checked; persist(); renderPrep(); }
+    });
+  });
+  // 文字編輯
+  section.querySelectorAll("[data-sub-edit]").forEach(span => {
+    span.addEventListener("blur", () => {
+      const it = sub.items.find(i => i.id === +span.dataset.subEdit);
+      if (it) { it.text = span.textContent.trim() || it.text; persist(); }
+    });
+  });
+  // 刪單一項
+  section.querySelectorAll("[data-sub-del]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      sub.items = sub.items.filter(i => i.id !== +btn.dataset.subDel);
+      persist(); renderPrep();
+    });
+  });
+  // 改子分類名稱
+  section.querySelector(".prep-subcat-name").addEventListener("blur", e => {
+    const txt = e.target.textContent.trim();
+    if (txt) { sub.name = txt; persist(); }
+  });
+  // 刪子分類
+  section.querySelector(".prep-sub-del").addEventListener("click", () => {
+    if (!confirm(`刪除「${sub.name}」子分類嗎？所有項目會消失 🥲`)) return;
+    parentCat.subcats = parentCat.subcats.filter(s => s.id !== sub.id);
+    persist(); renderPrep();
+  });
+  // 新增項目
+  const addInput = section.querySelector(".sub-add-input");
+  const addBtn   = section.querySelector(".sub-add-btn");
   function addItem() {
     const text = addInput.value.trim();
     if (!text) return;
-    cat.items.push({ id: nextPrepId++, text, done: false });
+    sub.items.push({ id: nextPrepId++, text, done: false });
     addInput.value = "";
-    persist();
-    renderPrep();
+    persist(); renderPrep();
   }
   addBtn.addEventListener("click", addItem);
   addInput.addEventListener("keydown", e => { if (e.key === "Enter") addItem(); });
 
   return section;
 }
+
+// 展開行前準備 Modal
+const prepModal = $("prepModal");
+$("prepExpandBtn").addEventListener("click", () => {
+  renderPrep(); // 重繪展開版
+  prepModal.hidden = false;
+});
+$("addCategoryBtn2").addEventListener("click", () => {
+  const name = prompt("新分類名稱（建議加 emoji）", "🎁 其他");
+  if (!name || !name.trim()) return;
+  state.prep.push({ id: "cat-" + Date.now(), name: name.trim(), items: [] });
+  persist();
+  renderPrep();
+});
+// aiPrepBtn2 is wired below with runAiPrep
 
 $("addCategoryBtn").addEventListener("click", () => {
   const name = prompt("新分類名稱（建議加 emoji）", "🎁 其他");
@@ -1122,70 +1605,118 @@ function generateAIPrep() {
   const monthMatch = (state.meta.dates || "").match(/(\d{1,2})\/\d/);
   const month = monthMatch ? Math.min(12, +monthMatch[1]) : null;
 
-  // ----- 待辦事項 -----
-  const todo = [
-    "📅 確認航班 / 車票時間",
-    "🏨 確認住宿訂單 + 入住時間",
-    `💴 換${dest ? dest.currency : "外幣"} / 提領現金`,
-    "📱 申請當地網路（SIM 卡 / eSIM）",
-    "🩺 購買旅行保險",
-    "📸 備份手機重要資料 / 雲端",
-    "🌤️ 查當地一週天氣預報",
-    "📞 通知信用卡公司海外消費",
-  ];
-  if (isOverseas) {
-    todo.unshift("🛂 確認護照效期超過 6 個月");
-    if (dest) todo.push(`🇯🇵 查 ${dest.hint} 在地禮儀 / 注意事項`);
-  }
-  if (dest) dest.extraTodo.forEach(t => todo.push(t));
-  if (foodCount >= 2)     todo.push(`🍜 預訂熱門餐廳（行程裡有 ${foodCount} 家）`);
-  if (shoppingCount >= 1) todo.push(`🛍️ 列出想買清單 / 比價（${shoppingCount} 個購物點）`);
-  if (hotelCount >= 2)    todo.push(`🏨 跨多家住宿（${hotelCount} 間），確認 check-in/out 時間`);
-  if (spotCount >= 10)    todo.push(`📍 行程豐富（${spotCount} 個景點），印一份備用紙本`);
+  // ----- 待辦事項（依子分類） -----
+  const todoSubcats = [
+    {
+      id: "sub-todo-travel", name: "✈️ 交通 & 住宿",
+      items: [
+        "📅 確認航班 / 車票時間與座位",
+        "🏨 確認住宿訂單 + 入住 / 退房時間",
+        ...(hotelCount >= 2 ? [`🏨 跨多家住宿（${hotelCount} 間），逐一確認 check-in/out`] : []),
+      ],
+    },
+    {
+      id: "sub-todo-finance", name: "💳 財務 & 保險",
+      items: [
+        `💴 換${dest ? dest.currency : "外幣"} / 提領現金`,
+        "📞 通知信用卡公司海外消費",
+        "🩺 購買旅行保險",
+      ],
+    },
+    {
+      id: "sub-todo-docs", name: "📄 文件 & 簽證",
+      items: [
+        ...(isOverseas ? ["🛂 確認護照效期超過 6 個月"] : []),
+        ...(isOverseas ? ["🖨️ 印出訂房 / 訂票確認信備份"] : []),
+        ...(dest ? [`🌐 查 ${dest.hint} 入境規定 / 免簽資格`] : []),
+      ],
+    },
+    {
+      id: "sub-todo-tech", name: "📱 科技 & 通訊",
+      items: [
+        "📱 申請當地網路（SIM 卡 / eSIM）",
+        "📸 備份手機重要資料 / 雲端",
+        "🌤️ 查當地一週天氣預報",
+        ...(dest ? dest.extraTodo : []),
+      ],
+    },
+    {
+      id: "sub-todo-spots", name: "🗺️ 景點 & 餐廳",
+      items: [
+        ...(foodCount >= 2 ? [`🍜 預訂熱門餐廳（行程裡有 ${foodCount} 家）`] : []),
+        ...(shoppingCount >= 1 ? [`🛍️ 列出想買清單 / 比價（${shoppingCount} 個購物點）`] : []),
+        ...(spotCount >= 10 ? [`📍 行程豐富（${spotCount} 個景點），建議印一份備用紙本`] : []),
+      ],
+    },
+  ].filter(s => s.items.length > 0);
 
-  // ----- 行李清單 -----
-  const packing = [
-    "🛂 護照 / 身分證",
-    "✈️ 機票 / 行程紙本",
-    "💳 信用卡 + 現金",
-    "📱 手機 + 充電線",
-    "🔋 行動電源",
-    "🔌 萬用轉接頭",
-    `👕 換洗衣物 ×${dayCount + 1} 套`,
-    "🧦 襪子 + 內衣",
-    "🧴 盥洗用品（牙刷牙膏）",
-    "💊 個人藥品 / 暈車藥",
-    "📷 相機 + 記憶卡",
-    "🎒 隨身小包 / 後背包",
-    "👟 一雙好走的鞋",
-  ];
-  // 月份天氣建議
+  // ----- 行李清單（依子分類） -----
+  const clothingItems = [`👕 換洗衣物 ×${dayCount + 1} 套`, "🧦 襪子 + 內衣褲", "👟 一雙好走的鞋"];
   if (month != null) {
     if ([6, 7, 8].includes(month)) {
-      packing.push("☀️ 防曬乳 + 太陽眼鏡 + 帽子");
-      packing.push("👕 透氣短袖 + 涼鞋");
+      clothingItems.push("☀️ 防曬衣 / 帽子", "🕶️ 太陽眼鏡", "👙 涼感短袖 + 涼鞋");
     } else if ([12, 1, 2].includes(month)) {
-      packing.push("🧥 厚外套 / 羽絨服");
-      packing.push("🧤 手套、毛帽、圍巾");
-      packing.push("♨️ 暖暖包");
+      clothingItems.push("🧥 厚外套 / 羽絨服", "🧤 手套、毛帽、圍巾", "♨️ 暖暖包");
     } else if ([3, 4, 5].includes(month)) {
-      packing.push("🧥 薄外套（早晚溫差大）");
-      packing.push("🌸 春季款式衣物");
+      clothingItems.push("🧥 薄外套（早晚溫差大）", "🌸 春季款輕薄衣物");
     } else {
-      packing.push("🧣 洋蔥式穿搭（薄外套 + 內搭）");
+      clothingItems.push("🧣 洋蔥式穿搭（薄外套 + 內搭）");
     }
   }
-  packing.push("☂️ 摺疊雨傘");
-  if (hotelCount >= 1) packing.push("👘 飯店過夜衣物");
-  if (shoppingCount >= 1) packing.push("🛍️ 預留行李箱空間給戰利品");
-  if (foodCount >= 2) packing.push("💊 腸胃藥（吃多了用得上）");
+  if (hotelCount >= 1) clothingItems.push("👘 飯店睡衣 / 過夜衣物");
 
-  return { todo, packing, dest, month };
+  const packingSubcats = [
+    {
+      id: "sub-pack-docs", name: "🛂 證件 & 文件",
+      items: [
+        "🛂 護照 / 身分證（效期確認）",
+        "✈️ 機票 / 車票 / 訂房確認信",
+        "💳 信用卡 + 提款卡",
+      ],
+    },
+    {
+      id: "sub-pack-clothing", name: "👕 衣物 & 鞋子",
+      items: clothingItems,
+    },
+    {
+      id: "sub-pack-toiletries", name: "🧴 洗漱 & 保養",
+      items: [
+        "🪥 牙刷 + 牙膏",
+        "🧴 洗髮精 + 沐浴乳（或確認飯店提供）",
+        "💆 保濕乳液 / 護手霜",
+        "☀️ 防曬乳 SPF 50+",
+        "💊 腸胃藥 + 止痛藥",
+        "💊 個人常備藥品 / 暈車藥",
+        ...(foodCount >= 2 ? ["💊 助消化藥（吃多了備用）"] : []),
+      ],
+    },
+    {
+      id: "sub-pack-electronics", name: "📱 電子設備",
+      items: [
+        "📱 手機 + 充電線",
+        "🔋 行動電源（≥ 10000mAh）",
+        "🔌 旅行萬用轉接頭",
+        "📷 相機 + 記憶卡 + 電池",
+        "🎧 耳機",
+        ...(isOverseas ? ["🔌 確認當地插座規格"] : []),
+      ],
+    },
+    {
+      id: "sub-pack-bags", name: "🎒 包包 & 隨身",
+      items: [
+        "🎒 後背包 / 隨身小包",
+        "☂️ 摺疊雨傘",
+        "💰 零錢包（裝外幣零錢）",
+        ...(shoppingCount >= 1 ? ["🛍️ 環保購物袋（戰利品備用）"] : []),
+      ],
+    },
+  ];
+
+  return { todoSubcats, packingSubcats, dest, month };
 }
 
-$("aiPrepBtn").addEventListener("click", () => {
-  const btn = $("aiPrepBtn");
-  btn.textContent = "🧠 AI 思考中...";
+function runAiPrep(btn, btnText) {
+  btn.textContent = "🧚 小天使思考中...";
   btn.disabled = true;
   setTimeout(() => {
     const sug = generateAIPrep();
@@ -1194,42 +1725,52 @@ $("aiPrepBtn").addEventListener("click", () => {
     let todoCat = state.prep.find(c => c.id === "cat-todo" || c.name.includes("待辦"));
     let packCat = state.prep.find(c => c.id === "cat-packing" || c.name.includes("行李"));
     if (!todoCat) {
-      todoCat = { id: "cat-todo", name: "📋 待辦事項", items: [] };
+      todoCat = { id: "cat-todo", name: "📋 待辦事項", subcats: [] };
       state.prep.unshift(todoCat);
     }
     if (!packCat) {
-      packCat = { id: "cat-packing", name: "🎒 行李清單", items: [] };
+      packCat = { id: "cat-packing", name: "🎒 行李清單", subcats: [] };
       state.prep.push(packCat);
     }
+    if (!todoCat.subcats) todoCat.subcats = [];
+    if (!packCat.subcats) packCat.subcats = [];
 
     let added = 0;
-    sug.todo.forEach(text => {
-      if (!todoCat.items.some(i => i.text === text)) {
-        todoCat.items.push({ id: nextPrepId++, text, done: false });
-        added++;
-      }
-    });
-    sug.packing.forEach(text => {
-      if (!packCat.items.some(i => i.text === text)) {
-        packCat.items.push({ id: nextPrepId++, text, done: false });
-        added++;
-      }
-    });
+    // 合併 subcats：若同 id 的子分類已存在，補充缺少的項目；否則新增整個子分類
+    function mergeSubcats(cat, newSubcats) {
+      newSubcats.forEach(newSub => {
+        if (!newSub.items || newSub.items.length === 0) return;
+        let existing = cat.subcats.find(s => s.id === newSub.id);
+        if (!existing) {
+          existing = { id: newSub.id, name: newSub.name, items: [] };
+          cat.subcats.push(existing);
+        }
+        const allExistingTexts = cat.subcats.flatMap(s => s.items.map(i => i.text));
+        newSub.items.forEach(text => {
+          if (!allExistingTexts.includes(text)) {
+            existing.items.push({ id: nextPrepId++, text, done: false });
+            added++;
+          }
+        });
+      });
+    }
+    mergeSubcats(todoCat, sug.todoSubcats);
+    mergeSubcats(packCat, sug.packingSubcats);
 
     persist();
     renderPrep();
-    btn.textContent = "✨ AI 建議行前準備";
+    btn.textContent = btnText;
     btn.disabled = false;
-    const ctx = sug.dest
-      ? `偵測到「${sug.dest.hint}」行程`
-      : "依目前行程內容";
+    const ctx = sug.dest ? `偵測到「${sug.dest.hint}」行程` : "依目前行程內容";
     if (added === 0) {
-      alert(`🤖 ${ctx}：看起來都齊了！要更多建議，自己再加分類後點一次。`);
+      alert(`🧚 旅遊小天使 ${ctx}：清單已經很完整了！若要重新生成，可刪掉舊分類再點一次。`);
     } else {
-      alert(`✨ ${ctx}，加了 ${added} 個小提醒到清單裡，記得勾掉已經處理好的～`);
+      alert(`✨ 旅遊小天使${ctx}幫你整理好了，加了 ${added} 個提醒，記得勾掉已完成的～`);
     }
   }, 700);
-});
+}
+$("aiPrepBtn").addEventListener("click", () => runAiPrep($("aiPrepBtn"), "✨ 旅遊小天使建議行前準備"));
+$("aiPrepBtn2").addEventListener("click", () => runAiPrep($("aiPrepBtn2"), "✨ 旅遊小天使建議行前準備"));
 
 // ============================================================
 // 邀請 / Modal 通用
@@ -1267,7 +1808,7 @@ const AI_TEMPLATES = [
   },
   s => s.length >= 3 ? `🍜 <b>中午 12:00 左右</b>可以穿插一頓在地午餐，不然下午會餓昏～` : null,
   s => s.length > 0 ? `📅 今天一共安排 <b>${s.length} 個景點</b>，節奏 ${s.length > 4 ? "有點趕 😵" : "剛剛好 😊"}。` : null,
-  s => s.some(x => x.photo) ? `📷 已經有 <b>${s.filter(x=>x.photo).length} 張旅行照片</b>，繼續記錄下去吧！` : null,
+  s => s.some(x => x.photos?.length) ? `📷 已經有 <b>${s.reduce((n,x)=>n+(x.photos?.length||0),0)} 張旅行照片</b>，繼續記錄下去吧！` : null,
 ];
 
 function refreshAiTips() {
@@ -1312,14 +1853,14 @@ function rearrangeOneDay(dayKey) {
 
 $("askAiBtn").addEventListener("click", () => {
   const btn = $("askAiBtn");
-  btn.textContent = "🧠 思考中...";
+  btn.textContent = "🧚 小天使思考中...";
   btn.disabled = true;
   setTimeout(() => {
     takeAiSnapshot();
     rearrangeOneDay(state.currentDay);
     persist();
     renderAll();
-    btn.textContent = "✨ 重排這天";
+    btn.textContent = "✨ 小天使排今天";
     btn.disabled = false;
   }, 700);
 });
@@ -1327,14 +1868,14 @@ $("askAiBtn").addEventListener("click", () => {
 $("askAiAllBtn").addEventListener("click", () => {
   if (!confirm("要讓 AI 幫整趟旅行重新排嗎？\n如果不滿意可以按「↩️ 還原」復原。")) return;
   const btn = $("askAiAllBtn");
-  btn.textContent = "🧠 整趟思考中...";
+  btn.textContent = "🧚 小天使思考中...";
   btn.disabled = true;
   setTimeout(() => {
     takeAiSnapshot();
     Object.keys(state.days).forEach(d => rearrangeOneDay(d));
     persist();
     renderAll();
-    btn.textContent = "🌐 重排整趟";
+    btn.textContent = "🌐 小天使排整趟";
     btn.disabled = false;
   }, 1000);
 });
@@ -1352,13 +1893,32 @@ $("undoAiBtn").addEventListener("click", () => {
 // ============================================================
 // 錢包
 // ============================================================
-function collectTransitCosts() {
-  // 把每對景點之間「有費用」的交通段，整理成錢包要顯示的條目
+// 把所有自動產生的開銷整理出來：景點門票 + 交通費
+// 預設都是 paidBy="p1"（"我"），splitWith=所有人
+function collectAutoEntries() {
   const entries = [];
+  const allIds = state.people.map(p => p.id);
+  const defaultPayer = state.people[0]?.id || "p1";
+
   Object.keys(state.days).map(Number).sort((a, b) => a - b).forEach(d => {
     const spots = state.days[d] || [];
     spots.forEach((s, i) => {
-      if (i === spots.length - 1) return;            // 最後一個沒有「下一站」
+      // 景點門票
+      if (+s.cost > 0) {
+        entries.push({
+          kind: "ticket",
+          icon: "🎟️",
+          label: `${spotCat(s.category).emoji} ${s.name}`,
+          amt: +s.cost,
+          ccy: state.baseCurrency,
+          paidBy: defaultPayer,
+          splitWith: allIds,
+          day: d,
+          spotId: s.id,
+        });
+      }
+      // 交通費（每組「景點 → 下一個景點」的所有 leg 加總成一筆）
+      if (i === spots.length - 1) return;
       if (!Array.isArray(s.travelLegs)) return;
       const totalCost = s.travelLegs.reduce((n, l) => n + (+l.cost || 0), 0);
       if (totalCost <= 0) return;
@@ -1366,94 +1926,441 @@ function collectTransitCosts() {
         s.travelLegs.filter(l => +l.cost > 0 || +l.mins > 0).map(l => l.mode.split(" ")[0])
       )].join("");
       entries.push({
+        kind: "transit",
+        icon: "🚇",
         label: `${usedModes} ${s.name} → ${spots[i + 1].name}`,
         amt: totalCost,
-        spotId: s.id,
+        ccy: state.baseCurrency,
+        paidBy: defaultPayer,
+        splitWith: allIds,
         day: d,
+        spotId: s.id,
       });
     });
   });
   return entries;
 }
 
+// 算分帳：誰要轉錢給誰多少
+function computeSettlement(allEntries) {
+  const net = {};
+  state.people.forEach(p => net[p.id] = 0);
+  allEntries.forEach(e => {
+    const baseAmt = convertAmount(e.amt, e.ccy, state.baseCurrency);
+    const ids = (e.splitWith && e.splitWith.length) ? e.splitWith : state.people.map(p => p.id);
+    const share = baseAmt / ids.length;
+    if (net[e.paidBy] !== undefined) net[e.paidBy] += baseAmt;
+    ids.forEach(id => { if (net[id] !== undefined) net[id] -= share; });
+  });
+  // 貪心配對：負的（欠別人）配上正的（被別人欠）
+  const debtors  = [];
+  const creditors = [];
+  Object.entries(net).forEach(([id, amt]) => {
+    if (amt > 0.5)  creditors.push({ id, amt });
+    if (amt < -0.5) debtors.push({ id, amt: -amt });
+  });
+  creditors.sort((a, b) => b.amt - a.amt);
+  debtors.sort((a, b) => b.amt - a.amt);
+  const transfers = [];
+  let i = 0, j = 0;
+  while (i < debtors.length && j < creditors.length) {
+    const d = debtors[i], c = creditors[j];
+    const pay = Math.min(d.amt, c.amt);
+    transfers.push({ from: d.id, to: c.id, amt: pay });
+    d.amt -= pay; c.amt -= pay;
+    if (d.amt < 0.5) i++;
+    if (c.amt < 0.5) j++;
+  }
+  return transfers;
+}
+
 function renderExpenses() {
   expenseListEl.innerHTML = "";
-  let total = 0;
+  const baseCcy = state.baseCurrency;
+  const baseInfo = ccyInfo(baseCcy);
+  $("baseCcyLabel").textContent = `(${baseInfo.symbol})`;
 
-  // 1️⃣ 手動輸入的花費
-  state.expenses.forEach((e, idx) => {
-    total += e.amt;
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <span>
-        <div>${escapeHtml(e.item)}</div>
-        <div class="who">由 ${escapeHtml(e.who)} 支付</div>
-      </span>
-      <div class="expense-right">
-        <b>${e.amt} <small>TWD</small></b>
-        <button class="icon-btn del tiny" data-exp-del="${idx}" title="刪除">✕</button>
-      </div>
+  // 把手動 + 自動的開銷組成一個大陣列，用同一邏輯算分帳
+  const auto = collectAutoEntries();
+  const allForSettle = [...state.expenses, ...auto];
+
+  // 總花費（換算到主要幣別）
+  const total = allForSettle.reduce((n, e) =>
+    n + convertAmount(e.amt, e.ccy, baseCcy), 0);
+  $("totalAmount").textContent = formatMoney(total, baseCcy);
+
+  // ----- 分帳結算 -----
+  const transfers = computeSettlement(allForSettle);
+  const settleEl = $("settlement");
+  if (transfers.length === 0) {
+    settleEl.innerHTML = `<div class="settle-empty">🎉 都打平了，不用補錢～</div>`;
+  } else {
+    settleEl.innerHTML = `
+      <div class="settle-head">🧮 分帳結算（誰給誰）</div>
+      ${transfers.map(t => {
+        const from = getPerson(t.from), to = getPerson(t.to);
+        return `<div class="settle-row">
+          <span class="avatar mini" style="background:${from.color}">${escapeHtml(from.name[0])}</span>
+          <b>${escapeHtml(from.name)}</b>
+          <span class="settle-arrow">→</span>
+          <span class="avatar mini" style="background:${to.color}">${escapeHtml(to.name[0])}</span>
+          <b>${escapeHtml(to.name)}</b>
+          <span class="settle-amt">${formatMoney(t.amt, baseCcy)}</span>
+        </div>`;
+      }).join("")}
     `;
-    expenseListEl.appendChild(li);
-  });
+  }
 
-  // 2️⃣ 自動：交通費（從每段 leg.cost 加總）
-  const transit = collectTransitCosts();
-  if (transit.length > 0) {
-    const groupHead = document.createElement("li");
-    groupHead.className = "wallet-group-head";
-    groupHead.innerHTML = `🚇 交通費（自動計算）`;
-    expenseListEl.appendChild(groupHead);
-    transit.forEach(t => {
-      total += t.amt;
+  // ----- 手動花費 -----
+  if (state.expenses.length > 0) {
+    const head = document.createElement("li");
+    head.className = "wallet-group-head";
+    head.textContent = "📝 手動記帳";
+    expenseListEl.appendChild(head);
+    state.expenses.forEach(e => {
+      const baseAmt = convertAmount(e.amt, e.ccy, baseCcy);
+      const payer = getPerson(e.paidBy);
+      const splitN = (e.splitWith || state.people.map(p => p.id)).length;
       const li = document.createElement("li");
-      li.className = "auto-entry";
-      li.dataset.spotId = t.spotId;
-      li.dataset.day = t.day;
+      li.className = "manual-entry";
+      li.dataset.expId = e.id;
       li.innerHTML = `
         <span>
-          <div>${escapeHtml(t.label)}</div>
-          <div class="who"><span class="auto-tag">Day ${t.day} · 自動</span></div>
+          <div>${escapeHtml(e.item)}</div>
+          <div class="who">
+            <span class="avatar mini" style="background:${payer.color}">${escapeHtml(payer.name[0])}</span>
+            ${escapeHtml(payer.name)} 付 · 分 ${splitN} 人
+          </div>
         </span>
         <div class="expense-right">
-          <b>${t.amt} <small>TWD</small></b>
+          <b>${formatMoney(e.amt, e.ccy)}</b>
+          ${e.ccy !== baseCcy ? `<small class="conv">≈ ${formatMoney(baseAmt, baseCcy)}</small>` : ""}
         </div>
       `;
-      // 點此條目 → 切到那天並開啟交通編輯
-      li.addEventListener("click", () => {
-        state.currentDay = t.day;
-        const spots = state.days[t.day];
-        const fromSpot = spots.find(s => s.id === t.spotId);
-        renderAll();
-        if (fromSpot) openTransitEditor(fromSpot);
-      });
+      li.addEventListener("click", () => openExpenseModalForEdit(e.id));
       expenseListEl.appendChild(li);
     });
   }
 
-  $("totalAmount").textContent = total.toLocaleString();
-  expenseListEl.querySelectorAll("[data-exp-del]").forEach(btn => {
-    btn.addEventListener("click", e => {
-      e.stopPropagation();
-      state.expenses.splice(+btn.dataset.expDel, 1);
-      persist();
-      renderExpenses();
+  // ----- 自動：景點門票 + 交通費 -----
+  if (auto.length > 0) {
+    const head = document.createElement("li");
+    head.className = "wallet-group-head";
+    head.textContent = "🤖 自動：景點門票 + 交通費";
+    expenseListEl.appendChild(head);
+    auto.forEach(t => {
+      const baseAmt = convertAmount(t.amt, t.ccy, baseCcy);
+      const li = document.createElement("li");
+      li.className = "auto-entry";
+      li.innerHTML = `
+        <span>
+          <div>${t.icon} ${escapeHtml(t.label)}</div>
+          <div class="who"><span class="auto-tag">Day ${t.day} · 自動</span></div>
+        </span>
+        <div class="expense-right">
+          <b>${formatMoney(t.amt, t.ccy)}</b>
+          ${t.ccy !== baseCcy ? `<small class="conv">≈ ${formatMoney(baseAmt, baseCcy)}</small>` : ""}
+        </div>
+      `;
+      // 點交通類條目 → 跳去編輯交通；點景點門票 → 編輯景點
+      li.addEventListener("click", () => {
+        state.currentDay = t.day;
+        const spots = state.days[t.day];
+        const spot = spots.find(s => s.id === t.spotId);
+        renderAll();
+        if (!spot) return;
+        if (t.kind === "transit") openTransitEditor(spot);
+        else openSpotModalForEdit(spot.id);
+      });
+      expenseListEl.appendChild(li);
     });
-  });
+  }
 }
 $("receiptInput").addEventListener("change", e => {
   const file = e.target.files[0];
   if (!file) return;
   const fakeAmt = 100 + Math.floor(Math.random() * 1500);
+  const me = state.people[0]?.id || "p1";
   state.expenses.push({
-    who: "我",
+    id: "e_" + Math.random().toString(36).slice(2, 8),
+    paidBy: me,
+    splitWith: state.people.map(p => p.id),
     item: `收據：${file.name.slice(0, 15)}`,
     amt: fakeAmt,
+    ccy: state.baseCurrency,
   });
   persist();
   renderExpenses();
-  alert(`📷 已辨識金額：${fakeAmt} TWD（示範用，正式版會用 OCR 讀發票）`);
+  alert(`📷 已辨識金額：${fakeAmt} ${state.baseCurrency}（示範用，正式版會用 OCR 讀發票）`);
   e.target.value = "";
+});
+
+// ============================================================
+// 💰 記一筆 / 編輯花費 Modal
+// ============================================================
+let editingExpenseId = null;
+
+function openExpenseModalForNew() {
+  editingExpenseId = null;
+  $("expenseModalTitle").textContent = "💰 記一筆花費";
+  $("delExpenseBtn").hidden = true;
+  $("expItem").value = "";
+  $("expAmt").value = "";
+  $("expCcy").value = state.baseCurrency;
+  // 預設付款人 = 第一位（"我"），分攤 = 全部
+  selectedPaidBy = state.people[0]?.id;
+  selectedSplitWith = state.people.map(p => p.id);
+  renderExpensePeople();
+  $("expenseModal").hidden = false;
+  setTimeout(() => $("expItem").focus(), 50);
+}
+
+function openExpenseModalForEdit(id) {
+  const e = state.expenses.find(x => x.id === id);
+  if (!e) return;
+  editingExpenseId = id;
+  $("expenseModalTitle").textContent = "✏️ 編輯花費";
+  $("delExpenseBtn").hidden = false;
+  $("expItem").value = e.item;
+  $("expAmt").value = e.amt;
+  $("expCcy").value = e.ccy;
+  selectedPaidBy = e.paidBy;
+  selectedSplitWith = [...(e.splitWith || state.people.map(p => p.id))];
+  renderExpensePeople();
+  $("expenseModal").hidden = false;
+}
+
+let selectedPaidBy = null;
+let selectedSplitWith = [];
+
+function renderExpensePeople() {
+  // 幣別下拉
+  $("expCcy").innerHTML = CURRENCIES.map(c =>
+    `<option value="${c.code}">${c.symbol} ${c.code} (${c.name})</option>`
+  ).join("");
+
+  // 誰付的：單選
+  $("expPaidBy").innerHTML = state.people.map(p => `
+    <button type="button" class="person-pick ${p.id === selectedPaidBy ? "active" : ""}"
+            data-paid="${p.id}" style="--c:${p.color}">
+      <span class="avatar mini" style="background:${p.color}">${escapeHtml(p.name[0])}</span>
+      ${escapeHtml(p.name)}
+    </button>
+  `).join("");
+  $("expPaidBy").querySelectorAll("[data-paid]").forEach(b => {
+    b.addEventListener("click", () => {
+      selectedPaidBy = b.dataset.paid;
+      renderExpensePeople();
+    });
+  });
+
+  // 跟誰分：多選
+  $("expSplitWith").innerHTML = state.people.map(p => {
+    const active = selectedSplitWith.includes(p.id);
+    return `
+      <button type="button" class="person-pick ${active ? "active" : ""}"
+              data-split="${p.id}" style="--c:${p.color}">
+        <span class="avatar mini" style="background:${p.color}">${escapeHtml(p.name[0])}</span>
+        ${escapeHtml(p.name)}
+        ${active ? "✓" : ""}
+      </button>
+    `;
+  }).join("");
+  $("expSplitWith").querySelectorAll("[data-split]").forEach(b => {
+    b.addEventListener("click", () => {
+      const id = b.dataset.split;
+      if (selectedSplitWith.includes(id)) {
+        selectedSplitWith = selectedSplitWith.filter(x => x !== id);
+      } else {
+        selectedSplitWith.push(id);
+      }
+      if (selectedSplitWith.length === 0) selectedSplitWith = state.people.map(p => p.id);
+      renderExpensePeople();
+    });
+  });
+}
+
+$("addExpenseBtn").addEventListener("click", openExpenseModalForNew);
+
+$("saveExpenseBtn").addEventListener("click", () => {
+  const item = $("expItem").value.trim();
+  const amt = +$("expAmt").value;
+  if (!item) { alert("項目不能空白喔 🐱"); return; }
+  if (!amt || amt <= 0) { alert("金額要大於 0 才行～"); return; }
+  if (!selectedPaidBy) { alert("選一個誰先付吧～"); return; }
+  if (selectedSplitWith.length === 0) selectedSplitWith = state.people.map(p => p.id);
+
+  const data = {
+    item,
+    amt,
+    ccy: $("expCcy").value,
+    paidBy: selectedPaidBy,
+    splitWith: [...selectedSplitWith],
+  };
+
+  if (editingExpenseId) {
+    const e = state.expenses.find(x => x.id === editingExpenseId);
+    if (e) Object.assign(e, data);
+  } else {
+    state.expenses.push({
+      id: "e_" + Math.random().toString(36).slice(2, 8),
+      ...data,
+    });
+  }
+  persist();
+  closeModal($("expenseModal"));
+  renderExpenses();
+});
+
+$("delExpenseBtn").addEventListener("click", () => {
+  if (!editingExpenseId) return;
+  if (!confirm("刪掉這筆花費嗎？🥲")) return;
+  state.expenses = state.expenses.filter(x => x.id !== editingExpenseId);
+  persist();
+  closeModal($("expenseModal"));
+  renderExpenses();
+});
+
+// ============================================================
+// 💱 幣別與匯率 Modal
+// ============================================================
+$("ratesBtn").addEventListener("click", () => {
+  $("baseCurrencySelect").innerHTML = CURRENCIES.map(c =>
+    `<option value="${c.code}" ${c.code === state.baseCurrency ? "selected" : ""}>
+      ${c.symbol} ${c.code} (${c.name})
+    </option>`
+  ).join("");
+  renderRatesList();
+  $("ratesUpdatedAt").textContent = state.ratesUpdatedAt
+    ? `📅 上次更新：${new Date(state.ratesUpdatedAt).toLocaleString("zh-TW")}`
+    : "📅 尚未更新過匯率";
+  openModal($("ratesModal"));
+});
+
+function renderRatesList() {
+  const list = $("ratesList");
+  list.innerHTML = CURRENCIES.filter(c => c.code !== "TWD").map(c => {
+    // rates[X] = 1 TWD = X 個 X 幣 → 1 X = 1 / rates[X] TWD
+    const oneXinTwd = state.rates[c.code] ? (1 / state.rates[c.code]) : 0;
+    return `
+      <div class="rate-row">
+        <span class="rate-ccy">${c.symbol} ${c.code} <small>${c.name}</small></span>
+        <span class="rate-eq">1 ${c.code} =</span>
+        <input type="number" step="0.0001" class="rate-input" data-rate-ccy="${c.code}"
+               value="${oneXinTwd.toFixed(4)}" />
+        <span class="rate-twd">TWD</span>
+      </div>
+    `;
+  }).join("");
+}
+
+$("saveRatesBtn").addEventListener("click", () => {
+  state.baseCurrency = $("baseCurrencySelect").value;
+  $("ratesList").querySelectorAll("[data-rate-ccy]").forEach(inp => {
+    const ccy = inp.dataset.rateCcy;
+    const oneXinTwd = +inp.value || 0;
+    // 我們存的 rates[X] 是「1 TWD = X 個 X 幣」，所以反過來
+    state.rates[ccy] = oneXinTwd > 0 ? (1 / oneXinTwd) : state.rates[ccy];
+  });
+  persist();
+  closeModal($("ratesModal"));
+  renderExpenses();
+});
+
+$("fetchRatesBtn").addEventListener("click", async () => {
+  const btn = $("fetchRatesBtn");
+  btn.textContent = "🔄 抓取中...";
+  btn.disabled = true;
+  try {
+    const res = await fetch("https://open.er-api.com/v6/latest/TWD");
+    const data = await res.json();
+    if (data.result !== "success" || !data.rates) throw new Error("API 回應異常");
+    // API: rates[X] 表示「1 TWD = rates[X] X」 → 直接套用
+    Object.entries(data.rates).forEach(([ccy, val]) => {
+      if (val) state.rates[ccy] = val;
+    });
+    state.ratesUpdatedAt = Date.now();
+    persist();
+    renderRatesList();
+    $("ratesUpdatedAt").textContent =
+      `📅 上次更新：${new Date(state.ratesUpdatedAt).toLocaleString("zh-TW")}`;
+    btn.textContent = "✓ 抓到了";
+    setTimeout(() => btn.textContent = "🔄 抓最新匯率", 1500);
+  } catch (err) {
+    alert(`😢 抓不到匯率：${err.message}\n（可能是網路問題，或 file:// 開啟的 CORS 限制）\n你可以手動輸入再儲存。`);
+    btn.textContent = "🔄 抓最新匯率";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ============================================================
+// 👥 同行夥伴 Modal
+// ============================================================
+$("membersBtn").addEventListener("click", () => {
+  renderMembersList();
+  openModal($("membersModal"));
+});
+
+function renderMembersList() {
+  const list = $("membersList");
+  list.innerHTML = state.people.map(p => `
+    <div class="member-row" data-pid="${p.id}">
+      <span class="avatar mini" style="background:${p.color}">${escapeHtml(p.name[0])}</span>
+      <input type="text" class="member-name" value="${escapeHtml(p.name)}" />
+      <input type="color" class="member-color" value="${p.color}" />
+      <button class="icon-btn tiny del" data-member-del="${p.id}" title="刪除">✕</button>
+    </div>
+  `).join("");
+
+  list.querySelectorAll(".member-name").forEach(inp => {
+    inp.addEventListener("blur", () => {
+      const pid = inp.closest(".member-row").dataset.pid;
+      const p = state.people.find(x => x.id === pid);
+      if (p) { p.name = inp.value.trim() || p.name; persist(); renderMembersList(); renderAll(); }
+    });
+  });
+  list.querySelectorAll(".member-color").forEach(inp => {
+    inp.addEventListener("change", () => {
+      const pid = inp.closest(".member-row").dataset.pid;
+      const p = state.people.find(x => x.id === pid);
+      if (p) { p.color = inp.value; persist(); renderMembersList(); renderAll(); }
+    });
+  });
+  list.querySelectorAll("[data-member-del]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (state.people.length <= 1) {
+        alert("至少要留 1 個人喔～");
+        return;
+      }
+      if (!confirm("把這個夥伴刪掉嗎？相關的記帳會改成由第一個人付。")) return;
+      const removedId = btn.dataset.memberDel;
+      const fallback = state.people.find(p => p.id !== removedId).id;
+      state.people = state.people.filter(p => p.id !== removedId);
+      // 把該人付的款項改成 fallback；分攤名單也移除該人
+      state.expenses.forEach(e => {
+        if (e.paidBy === removedId) e.paidBy = fallback;
+        e.splitWith = (e.splitWith || []).filter(id => id !== removedId);
+        if (e.splitWith.length === 0) e.splitWith = state.people.map(p => p.id);
+      });
+      persist();
+      renderMembersList();
+      renderAll();
+    });
+  });
+}
+
+$("addMemberBtn").addEventListener("click", () => {
+  const colors = ["#FFB5A7", "#B8E0D2", "#FCD5CE", "#E4C1F9", "#FFE5A0", "#C9F4B5", "#B5C9F4", "#F4B5D9"];
+  const color = colors[state.people.length % colors.length];
+  state.people.push({
+    id: "p_" + Math.random().toString(36).slice(2, 6),
+    name: "新成員",
+    color,
+  });
+  persist();
+  renderMembersList();
+  renderAll();
 });
 
 // ============================================================
@@ -1467,7 +2374,7 @@ $("exportPdfBtn").addEventListener("click", () => {
 function buildPrintView() {
   const el = $("printView");
   const t = state.travel;
-  const allPrep = state.prep.flatMap(c => c.items);
+  const allPrep = state.prep.flatMap(c => (c.subcats || []).flatMap(s => s.items || []));
   const prepDone = allPrep.filter(p => p.done).length;
   const totalCost = state.expenses.reduce((n, e) => n + e.amt, 0);
 
@@ -1535,13 +2442,18 @@ function buildPrintView() {
   if (allPrep.length > 0) {
     html += `<h2>📝 行前準備 (${prepDone}/${allPrep.length})</h2>`;
     state.prep.forEach(cat => {
-      if (cat.items.length === 0) return;
-      const done = cat.items.filter(i => i.done).length;
-      html += `<h3 class="print-prep-cat">${escapeHtml(cat.name)} (${done}/${cat.items.length})</h3><ul class="print-prep">`;
-      cat.items.forEach(it => {
-        html += `<li>${it.done ? "☑" : "☐"} ${escapeHtml(it.text)}</li>`;
+      const allCatItems = (cat.subcats || []).flatMap(s => s.items || []);
+      if (allCatItems.length === 0) return;
+      const done = allCatItems.filter(i => i.done).length;
+      html += `<h3 class="print-prep-cat">${escapeHtml(cat.name)} (${done}/${allCatItems.length})</h3>`;
+      (cat.subcats || []).forEach(sub => {
+        if (!sub.items || sub.items.length === 0) return;
+        html += `<p style="font-weight:700;font-size:12px;margin:8px 0 4px;color:#555">${escapeHtml(sub.name)}</p><ul class="print-prep">`;
+        sub.items.forEach(it => {
+          html += `<li>${it.done ? "☑" : "☐"} ${escapeHtml(it.text)}</li>`;
+        });
+        html += `</ul>`;
       });
-      html += `</ul>`;
     });
   }
 
@@ -1560,7 +2472,21 @@ function buildPrintView() {
 // ============================================================
 // 初始化
 // ============================================================
+function renderAvatars() {
+  const wrap = $("topAvatars");
+  if (!wrap) return;
+  wrap.innerHTML = state.people.slice(0, 4).map(p =>
+    `<span class="avatar" style="background:${p.color}" title="${escapeHtml(p.name)}">${escapeHtml(p.name[0])}</span>`
+  ).join("") + (state.people.length > 4
+    ? `<span class="avatar more">+${state.people.length - 4}</span>`
+    : "");
+  // 點頭像區 → 開成員管理
+  wrap.style.cursor = "pointer";
+  wrap.onclick = () => $("membersBtn").click();
+}
+
 function renderAll() {
+  renderAvatars();
   renderDayTabs();
   renderTimeline();
   renderTravel();

@@ -128,9 +128,26 @@ function seedIfEmpty() {
       ],
       3: [], 4: [],
     },
+    // 同行夥伴
+    people: [
+      { id: "p1", name: "我",   color: "#FFB5A7" },
+      { id: "p2", name: "小琪", color: "#B8E0D2" },
+      { id: "p3", name: "安安", color: "#FCD5CE" },
+    ],
+    // 主要幣別（最後總額會換算到這個）
+    baseCurrency: "TWD",
+    // 匯率：rates[X] 表示「1 TWD = X 個 X 幣」
+    rates: {
+      TWD: 1, JPY: 4.78, USD: 0.032, KRW: 41.6, THB: 1.08,
+      EUR: 0.029, GBP: 0.025, HKD: 0.247, CNY: 0.227, SGD: 0.043,
+      VND: 778, AUD: 0.048,
+    },
+    ratesUpdatedAt: null,
     expenses: [
-      { who: "小琪", item: "京都車站便當", amt: 350 },
-      { who: "安安", item: "抹茶冰淇淋 ×3", amt: 540 },
+      { id: "e1", paidBy: "p2", splitWith: ["p1","p2","p3"],
+        item: "京都車站便當",  amt: 1500, ccy: "JPY" },
+      { id: "e2", paidBy: "p3", splitWith: ["p1","p2","p3"],
+        item: "抹茶冰淇淋 ×3", amt: 800,  ccy: "JPY" },
     ],
     travel: {
       outbound: {
