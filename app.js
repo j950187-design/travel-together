@@ -2604,6 +2604,29 @@ function buildPrintView() {
 
   // ── 行前準備 ──
   if (allPrep.length > 0) {
+    const PREP_ROW_BG = ["#FFFDF5","#F0F5EC","#EFF5F9","#F5EDDF","#F5F0FB","#FFF5EC"];
+    const buildPrepCatGrid = (cat, idx) => {
+      const allItems = (cat.subcats||[]).flatMap(s => s.items || []);
+      if (allItems.length === 0) return '';
+      const bg = PREP_ROW_BG[idx % PREP_ROW_BG.length];
+      let s = `<div class="pv-prep-cat" style="--row-bg:${bg}">`;
+      s += `<div class="pv-prep-cat-name">${escapeHtml(cat.name)}</div>`;
+      s += `<div class="pv-prep-items-grid">`;
+      (cat.subcats||[]).forEach(sub => {
+        if (!sub.items || sub.items.length === 0) return;
+        s += `<div class="pv-prep-sub-name">${escapeHtml(sub.name)}</div>`;
+        sub.items.forEach(it => {
+          s += `<div class="pv-prep-item"><span class="${it.done ? "pv-check" : "pv-uncheck"}">${it.done ? "☑" : "☐"}</span><span>${escapeHtml(it.text)}</span></div>`;
+        });
+      });
+      s += `</div></div>`;
+      return s;
+    };
+
+    const allPrepCats = state.prep.filter(c => (c.subcats||[]).flatMap(s=>s.items||[]).length > 0);
+    let catsHtml = "";
+    allPrepCats.forEach((cat, i) => { catsHtml += buildPrepCatGrid(cat, i); });
+
     html += `
       <div class="pv-section">
         <div class="pv-section-head">
@@ -2612,22 +2635,10 @@ function buildPrintView() {
           <span class="pv-section-sub">${prepDone} / ${allPrep.length} 已完成</span>
         </div>
         <div class="pv-prep-cols">
+          ${catsHtml}
+        </div>
+      </div>
     `;
-    state.prep.forEach(cat => {
-      const catItems = (cat.subcats || []).flatMap(s => s.items || []);
-      if (catItems.length === 0) return;
-      html += `<div class="pv-prep-cat"><div class="pv-prep-cat-name">${escapeHtml(cat.name)}</div>`;
-      (cat.subcats || []).forEach(sub => {
-        if (!sub.items || sub.items.length === 0) return;
-        html += `<div class="pv-prep-sub"><div class="pv-prep-sub-name">${escapeHtml(sub.name)}</div>`;
-        sub.items.forEach(it => {
-          html += `<div class="pv-prep-item"><span class="${it.done ? "pv-check" : "pv-uncheck"}">${it.done ? "☑" : "☐"}</span>${escapeHtml(it.text)}</div>`;
-        });
-        html += `</div>`;
-      });
-      html += `</div>`;
-    });
-    html += `</div></div>`;
   }
 
   // ── 每日行程 ──

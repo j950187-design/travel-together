@@ -157,77 +157,468 @@ document.getElementById("exportAllBtn").addEventListener("click", () => {
 });
 
 // ============================================================
-// 📥 匯入：從 .json 檔還原 / 合併旅行
+// 📥 匯入：.json / Line .txt / Excel .xlsx / PDF
 // ============================================================
-document.getElementById("importInput").addEventListener("change", e => {
+document.getElementById("importInput").addEventListener("change", async e => {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = ev => {
-    try {
-      const parsed = JSON.parse(ev.target.result);
+  e.target.value = "";
+  const ext = file.name.split(".").pop().toLowerCase();
+  try {
+    if (ext === "json") {
+      const text = await file.text();
+      importJsonBackup(text);
+    } else if (ext === "txt") {
+      const text = await file.text();
+      importLineChat(text);
+    } else if (ext === "xlsx" || ext === "xls") {
+      await importExcel(file);
+    } else if (ext === "pdf") {
+      await importPdf(file);
+    } else {
+      alert("😢 不支援此格式，請上傳 .json、.txt（Line）、.xlsx 或 .pdf");
+    }
+  } catch (err) {
+    alert(`😢 匯入失敗：${err.message}`);
+  }
+});
 
-      // 接受兩種格式：
-      // 1) 我們匯出的格式 { app, version, trips: { id: trip } }
-      // 2) 直接是 trips 物件 { id: trip }
-      let incoming;
-      if (parsed && typeof parsed === "object" && parsed.trips && typeof parsed.trips === "object") {
-        incoming = parsed.trips;
-      } else if (parsed && typeof parsed === "object" && Object.values(parsed).every(t => t && t.meta)) {
-        incoming = parsed;
-      } else {
-        throw new Error("檔案內容不是旅行資料");
-      }
+function importJsonBackup(text) {
+  const parsed = JSON.parse(text);
+  let incoming;
+  if (parsed && parsed.trips && typeof parsed.trips === "object") {
+    incoming = parsed.trips;
+  } else if (parsed && typeof parsed === "object" && Object.values(parsed).every(t => t && t.meta)) {
+    incoming = parsed;
+  } else {
+    throw new Error("檔案內容不是旅行資料，請確認是從本程式匯出的 .json 檔案。");
+  }
+  const incomingIds = Object.keys(incoming);
+  if (incomingIds.length === 0) { alert("📭 這個檔案裡沒有任何旅行喔"); return; }
 
-      const incomingIds = Object.keys(incoming);
-      if (incomingIds.length === 0) {
-        alert("📭 這個檔案裡沒有任何旅行喔");
-        return;
-      }
+  const existing = loadAllTrips();
+  const overlap = incomingIds.filter(id => existing[id]);
+  let mode = "merge";
+  if (overlap.length > 0) {
+    const choice = confirm(
+      `要匯入 ${incomingIds.length} 趟旅行，其中 ${overlap.length} 趟跟現有的 ID 重複。\n\n` +
+      `按「確定」→ 覆蓋同 ID 的舊資料\n按「取消」→ 當新旅行另存`
+    );
+    mode = choice ? "overwrite" : "asNew";
+  }
+  let added = 0, replaced = 0;
+  for (const [id, trip] of Object.entries(incoming)) {
+    if (existing[id] && mode === "overwrite") { existing[id] = trip; replaced++; }
+    else if (existing[id]) {
+      const newId = newTripId();
+      const cp = JSON.parse(JSON.stringify(trip));
+      if (cp.meta) cp.meta.title = (cp.meta.title || "未命名") + "（匯入）";
+      existing[newId] = cp; added++;
+    } else { existing[id] = trip; added++; }
+  }
+  saveAllTrips(existing);
+  alert(`📥 匯入完成！新增 ${added} 趟${replaced ? `、覆蓋 ${replaced} 趟舊資料` : ""}。`);
+  renderTrips();
+}
 
-      const existing = loadAllTrips();
-      const overlap = incomingIds.filter(id => existing[id]);
+// ── Line 聊天記錄解析 ──────────────────────────────────────
+function importLineChat(text) {
+  const lines = text.split(/\r?\n/);
 
-      // 如果有重疊：詢問要覆蓋還是當新的另存
-      let proceed = true;
-      let mode = "merge";
-      if (overlap.length > 0) {
-        const choice = confirm(
-          `要匯入 ${incomingIds.length} 趟旅行，其中 ${overlap.length} 趟跟現有的 ID 重複。\n\n` +
-          `按「確定」→ 覆蓋同 ID 的舊資料\n` +
-          `按「取消」→ 把它們當新旅行另存（不覆蓋）`
-        );
-        mode = choice ? "overwrite" : "asNew";
-      }
+  // 1. 取得群組 / 對話名稱作為行程標題
+  let title = "Line 匯入行程";
+  const headerM = text.match(/\[LINE\].*[「"'](.+?)[」"']/) ||
+                  text.match(/\[LINE\] Chat history with [「"']?(.+?)[」"']?[\r\n]/);
+  if (headerM) title = headerM[1].trim();
 
-      let added = 0, replaced = 0;
-      for (const [id, trip] of Object.entries(incoming)) {
-        if (existing[id]) {
-          if (mode === "overwrite") {
-            existing[id] = trip;
-            replaced++;
-          } else {
-            // 另存新 ID，避免覆蓋
-            const newId = newTripId();
-            const renamed = JSON.parse(JSON.stringify(trip));
-            if (renamed.meta) renamed.meta.title = (renamed.meta.title || "未命名") + "（匯入）";
-            existing[newId] = renamed;
-            added++;
+  // 2. 逐行解析，按日期分組
+  // Line 日期行格式：2024/01/15(週一)  或  2024年1月15日(週一)
+  const dateLine = /^(\d{4})[\/年](\d{1,2})[\/月](\d{1,2})[日(（]/;
+  // Line 訊息格式：12:00\t發話人\t內容  (有些版本是 下午12:00)
+  const msgLine  = /^(?:上午|下午)?(\d{1,2}:\d{2})[\t\s]+(.+?)[\t	](.+)$/;
+
+  const days = [];      // [{ dateStr, msgs: [{time,sender,text}] }]
+  let cur = null;
+
+  for (const line of lines) {
+    const dm = line.match(dateLine);
+    if (dm) {
+      cur = { dateStr: `${dm[1]}/${dm[2].padStart(2,"0")}/${dm[3].padStart(2,"0")}`, msgs: [] };
+      days.push(cur);
+      continue;
+    }
+    const mm = line.match(msgLine);
+    if (mm && cur) {
+      cur.msgs.push({ time: mm[1], sender: mm[2].trim(), text: mm[3].trim() });
+    }
+  }
+
+  if (days.length === 0) throw new Error("找不到 Line 聊天記錄的日期格式，請確認是 Line 匯出的 .txt 檔。");
+
+  // 3. 旅伴（去掉系統訊息發話人）
+  const systemSenders = new Set(["系統訊息","System Message","LINE"]);
+  const senders = new Set();
+  days.forEach(d => d.msgs.forEach(m => { if (!systemSenders.has(m.sender)) senders.add(m.sender); }));
+  const people = [...senders].join("、");
+
+  // 4. 日期範圍
+  const allDates = days.map(d => d.dateStr).sort();
+  const dateRange = allDates.length > 1
+    ? `${allDates[0]} - ${allDates[allDates.length - 1]}`
+    : allDates[0];
+
+  // 5. 每日行程：偵測地點 & 費用，其餘聊天存成備注景點
+  const spotCategories = {
+    餐廳: ["餐廳","吃飯","吃","午餐","晚餐","早餐","ramen","拉麵","燒肉","壽司","咖啡"],
+    住宿: ["飯店","旅館","民宿","hotel","住","check","入住"],
+    景點: ["景點","參觀","逛","公園","博物館","寺","神社","城","市場","購物","mall"],
+    交通: ["飛機","班機","新幹線","電車","捷運","JR","出發","抵達","機場"],
+  };
+  const expenseRe = /(?:NT\$|NTD|\$|¥|JPY|約?)\s*([\d,]+)/gi;
+
+  const tripDays = {};
+  const tripExpenses = [];
+
+  days.forEach((day, idx) => {
+    const dayNum = idx + 1;
+    const spots = [];
+
+    // 偵測地點關鍵字，提取潛在景點名
+    const locationRe = /(?:去|到|前往|抵達|參觀|逛)([^\s，,。！!？?、\d]{2,10})/g;
+    const foundLocations = new Map(); // name → {time, note, cat}
+
+    day.msgs.forEach(msg => {
+      if (systemSenders.has(msg.sender)) return;
+
+      // 地點偵測
+      let lm;
+      while ((lm = locationRe.exec(msg.text)) !== null) {
+        const loc = lm[1].replace(/[的了嗎呢吧～～!！？?。，,]/g, "").trim();
+        if (loc.length >= 2 && !foundLocations.has(loc)) {
+          let cat = "景點";
+          for (const [c, kws] of Object.entries(spotCategories)) {
+            if (kws.some(k => msg.text.includes(k))) { cat = c; break; }
           }
-        } else {
-          existing[id] = trip;
-          added++;
+          foundLocations.set(loc, { time: msg.time, sender: msg.sender, cat, text: msg.text });
         }
       }
-      saveAllTrips(existing);
-      alert(`📥 匯入完成！\n新增 ${added} 趟${replaced ? `、覆蓋 ${replaced} 趟舊資料` : ""}。`);
-      renderTrips();
-    } catch (err) {
-      alert(`😢 匯入失敗：${err.message}\n請確認是從本程式匯出的 .json 檔案。`);
+
+      // 費用偵測
+      let em;
+      const textCopy = msg.text;
+      while ((em = expenseRe.exec(textCopy)) !== null) {
+        const amt = parseFloat(em[1].replace(/,/g, ""));
+        if (amt > 0) {
+          tripExpenses.push({
+            id: `exp-line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            name: msg.text.substring(0, 40),
+            amount: amt,
+            ccy: /[¥JPY]/.test(em[0]) ? "JPY" : "TWD",
+            who: [msg.sender],
+            paidBy: msg.sender,
+            date: day.dateStr
+          });
+        }
+      }
+    });
+
+    // 自動偵測到的地點 → 各別景點卡
+    for (const [name, info] of foundLocations) {
+      spots.push({
+        id: `spot-line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name,
+        cat: info.cat,
+        addr: "",
+        note: `來自 Line：${info.text}`,
+        cost: "",
+        costCcy: "TWD",
+        time: info.time,
+        duration: 60,
+        photos: [],
+        shopItems: []
+      });
     }
-    // 清空 input value，下次選同一個檔也會觸發
-    e.target.value = "";
+
+    // 全天聊天紀錄 → 存成一張「聊天備注」景點卡
+    const chatNote = day.msgs
+      .filter(m => !systemSenders.has(m.sender))
+      .map(m => `${m.time} ${m.sender}：${m.text}`)
+      .join("\n");
+    if (chatNote) {
+      spots.push({
+        id: `spot-note-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name: `💬 Day ${dayNum} 聊天記錄`,
+        cat: "note",
+        addr: "",
+        note: chatNote,
+        cost: "",
+        costCcy: "TWD",
+        time: "",
+        duration: 0,
+        photos: [],
+        shopItems: []
+      });
+    }
+
+    tripDays[dayNum] = spots;
+  });
+
+  // 6. 組成旅行物件並儲存
+  const tripId = newTripId();
+  const trip = {
+    meta: {
+      title,
+      dates: dateRange,
+      people,
+      cover: "💬",
+      createdAt: Date.now()
+    },
+    days: tripDays,
+    travel: { outbound: null, inbound: null, legs: [] },
+    expenses: tripExpenses,
+    prep: [],
+    baseCurrency: "TWD"
   };
-  reader.onerror = () => alert("😢 讀取檔案失敗，請再試一次");
-  reader.readAsText(file, "utf-8");
-});
+
+  const existing = loadAllTrips();
+  existing[tripId] = trip;
+  saveAllTrips(existing);
+
+  const locCount = Object.values(tripDays).flatMap(s => s).filter(s => s.cat !== "note").length;
+  const expCount = tripExpenses.length;
+  alert(
+    `✅ Line 聊天記錄匯入完成！\n\n` +
+    `📅 ${days.length} 天  👥 ${[...senders].length} 位旅伴\n` +
+    `📍 偵測到 ${locCount} 個地點  💰 ${expCount} 筆費用\n\n` +
+    `每天的完整對話已存在「💬 聊天備注」景點卡，方便對照參考。`
+  );
+  renderTrips();
+}
+
+// ============================================================
+// 共用工具
+// ============================================================
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement("script");
+    s.src = src; s.onload = resolve;
+    s.onerror = () => reject(new Error(`無法載入外部函式庫：${src}`));
+    document.head.appendChild(s);
+  });
+}
+
+function makeSpotId() { return `spot-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+function makeExpId()  { return `exp-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+
+function guessCat(name) {
+  const n = (name || "").toLowerCase();
+  if (/餐|食|吃|飯|cafe|coffee|咖啡|breakfast|lunch|dinner|ramen|拉麵|燒肉|壽司|居酒屋/.test(n)) return "餐廳";
+  if (/hotel|飯店|旅館|民宿|住宿|inn|lodge|hostel/.test(n)) return "住宿";
+  if (/airport|機場|飛機|flight|航班|bus|train|jr|新幹線|電車|捷運|交通|車站/.test(n)) return "交通";
+  return "景點";
+}
+
+function parseAnyDate(cell) {
+  if (!cell && cell !== 0) return null;
+  // Excel serial number
+  if (typeof cell === "number" && cell > 1000) {
+    const d = new Date(Math.round((cell - 25569) * 86400 * 1000));
+    return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`;
+  }
+  const s = String(cell);
+  const m = s.match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
+  if (m) return `${m[1]}/${m[2].padStart(2,"0")}/${m[3].padStart(2,"0")}`;
+  return null;
+}
+
+function saveTripAndAlert(trip, summary) {
+  const id = newTripId();
+  const all = loadAllTrips();
+  all[id] = trip;
+  saveAllTrips(all);
+  alert(summary);
+  renderTrips();
+}
+
+// ============================================================
+// 📊 Excel (.xlsx / .xls) 匯入
+// ============================================================
+async function importExcel(file) {
+  if (!window.XLSX) {
+    await loadScript("https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js");
+  }
+  const buf = await file.arrayBuffer();
+  const wb  = XLSX.read(buf, { type: "array", cellDates: false });
+  const ws  = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+  // 找 header 行（前 5 行裡含最多關鍵字的那行）
+  const colKeys = {
+    date:     ["日期","date","出發日","day"],
+    time:     ["時間","time","出發","抵達"],
+    location: ["地點","景點","活動","行程","名稱","location","place","name","item"],
+    note:     ["備注","說明","note","memo","description","備註"],
+    cost:     ["費用","金額","價格","cost","price","amount","花費"],
+  };
+  let headerIdx = 0, colMap = {};
+  for (let i = 0; i < Math.min(6, rows.length); i++) {
+    const found = {};
+    rows[i].forEach((cell, ci) => {
+      const s = String(cell).toLowerCase().trim();
+      for (const [key, kws] of Object.entries(colKeys)) {
+        if (!found[key] && kws.some(k => s.includes(k))) found[key] = ci;
+      }
+    });
+    if (Object.keys(found).length > Object.keys(colMap).length) {
+      colMap = found; headerIdx = i;
+    }
+  }
+
+  const dayMap = new Map();
+  let curDate = null;
+  const expenseRe = /(?:NT\$|NTD|\$|¥|JPY)?\s*([\d,]+)/;
+
+  rows.slice(headerIdx + 1).forEach(row => {
+    const rawDate = colMap.date !== undefined ? row[colMap.date] : null;
+    const ds = parseAnyDate(rawDate);
+    if (ds) curDate = ds;
+    if (!curDate) return;
+
+    const name = String(colMap.location !== undefined ? row[colMap.location] : (row[1] || "")).trim();
+    if (!name) return;
+
+    const timeStr  = String(colMap.time !== undefined ? row[colMap.time] : "").trim();
+    const noteStr  = String(colMap.note !== undefined ? row[colMap.note] : "").trim();
+    const costRaw  = String(colMap.cost !== undefined ? row[colMap.cost] : "").trim();
+    const costM    = costRaw.match(expenseRe);
+    const cost     = costM ? parseFloat(costM[1].replace(/,/g, "")) : "";
+
+    if (!dayMap.has(curDate)) dayMap.set(curDate, []);
+    dayMap.get(curDate).push({
+      id: makeSpotId(), name, cat: guessCat(name),
+      addr: "", note: noteStr,
+      cost: cost || "", costCcy: "TWD",
+      time: timeStr, duration: 60,
+      photos: [], shopItems: []
+    });
+  });
+
+  if (dayMap.size === 0) throw new Error("Excel 中找不到可解析的行程資料（需有日期欄位）。");
+
+  const dates    = [...dayMap.keys()].sort();
+  const tripDays = {};
+  dates.forEach((d, i) => { tripDays[i + 1] = dayMap.get(d); });
+  const title    = file.name.replace(/\.[^.]+$/, "") || "Excel 匯入行程";
+  const dateRange = dates.length > 1 ? `${dates[0]} - ${dates[dates.length-1]}` : dates[0];
+  const spotCount = Object.values(tripDays).flat().length;
+
+  saveTripAndAlert({
+    meta: { title, dates: dateRange, people: "", cover: "📊", createdAt: Date.now() },
+    days: tripDays,
+    travel: { outbound: null, inbound: null, legs: [] },
+    expenses: [], prep: [], baseCurrency: "TWD"
+  }, `✅ Excel 匯入完成！\n\n📅 ${dates.length} 天  📍 ${spotCount} 個項目`);
+}
+
+// ============================================================
+// 📄 PDF 匯入（用 PDF.js 提取文字，再解析結構）
+// ============================================================
+async function importPdf(file) {
+  if (!window.pdfjsLib) {
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
+  // 逐頁提取文字，保留換行結構
+  let fullText = "";
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page    = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    // 根據 y 座標分行，讓不同高度的文字不黏在一起
+    const byLine = new Map();
+    content.items.forEach(item => {
+      const y = Math.round(item.transform[5]);
+      if (!byLine.has(y)) byLine.set(y, []);
+      byLine.get(y).push(item.str);
+    });
+    [...byLine.keys()].sort((a,b) => b - a).forEach(y => {
+      fullText += byLine.get(y).join(" ").trim() + "\n";
+    });
+    fullText += "\n";
+  }
+
+  // ── 解析邏輯：與 Line txt 類似 ──
+  const lines   = fullText.split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const dateRe  = /(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/;
+  const timeRe  = /^(\d{1,2}:\d{2})/;
+  const costRe  = /(?:NT\$|NTD|\$|¥|JPY)\s*([\d,]+)/g;
+
+  const dayMap  = new Map();
+  const expenses = [];
+  let curDate   = null;
+
+  lines.forEach(line => {
+    const dm = line.match(dateRe);
+    if (dm) {
+      curDate = `${dm[1]}/${dm[2].padStart(2,"0")}/${dm[3].padStart(2,"0")}`;
+      if (!dayMap.has(curDate)) dayMap.set(curDate, []);
+      return;
+    }
+
+    // 費用偵測（不管有沒有日期都收）
+    let em;
+    while ((em = costRe.exec(line)) !== null) {
+      const amt = parseFloat(em[1].replace(/,/g,""));
+      if (amt > 0) expenses.push({
+        id: makeExpId(), name: line.substring(0, 40),
+        amount: amt, ccy: /[¥JPY]/.test(em[0]) ? "JPY" : "TWD",
+        who: [], paidBy: ""
+      });
+    }
+
+    if (!curDate) return;
+    const tm   = line.match(timeRe);
+    const name = line.replace(timeRe, "").replace(dateRe, "").trim();
+    if (name.length < 2 || name.length > 80) return;
+
+    dayMap.get(curDate).push({
+      id: makeSpotId(), name: name.substring(0, 50),
+      cat: guessCat(name), addr: "", note: "",
+      cost: "", costCcy: "TWD",
+      time: tm ? tm[1] : "", duration: 60,
+      photos: [], shopItems: []
+    });
+  });
+
+  // 沒解析到日期 → 把所有文字存成備注
+  if (dayMap.size === 0) {
+    dayMap.set("day1", [{
+      id: makeSpotId(), name: "📄 PDF 內容備注",
+      cat: "note", addr: "",
+      note: fullText.substring(0, 3000),
+      cost: "", costCcy: "TWD", time: "", duration: 0,
+      photos: [], shopItems: []
+    }]);
+  }
+
+  const dates    = [...dayMap.keys()].sort();
+  const tripDays = {};
+  dates.forEach((d, i) => { tripDays[i + 1] = dayMap.get(d); });
+  const title    = file.name.replace(/\.[^.]+$/, "") || "PDF 匯入行程";
+  const validDates = dates.filter(d => /\d{4}/.test(d));
+  const dateRange  = validDates.length > 1
+    ? `${validDates[0]} - ${validDates[validDates.length-1]}`
+    : (validDates[0] || "");
+  const spotCount = Object.values(tripDays).flat().length;
+
+  saveTripAndAlert({
+    meta: { title, dates: dateRange, people: "", cover: "📄", createdAt: Date.now() },
+    days: tripDays,
+    travel: { outbound: null, inbound: null, legs: [] },
+    expenses, prep: [], baseCurrency: "TWD"
+  }, `✅ PDF 匯入完成！\n\n📅 ${validDates.length} 天  📍 ${spotCount} 個項目  💰 ${expenses.length} 筆費用`);
+}

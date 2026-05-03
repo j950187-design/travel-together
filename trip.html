@@ -31,27 +31,28 @@
 
 <!-- ======== 主體 ======== -->
 <main class="layout no-print">
-  <section class="plan">
 
-    <!-- 去程 / 回程 -->
-    <div class="card travel-card">
-      <div class="card-head">
-        <span class="emoji">✈️</span>
-        <h2>出發與回程</h2>
+  <!-- 去程 / 回程（layout 直接子層，方便手機排序） -->
+  <div class="card travel-card">
+    <div class="card-head">
+      <span class="emoji">✈️</span>
+      <h2>出發與回程</h2>
+    </div>
+    <div class="travel-grid">
+      <div class="travel-item" data-leg="outbound">
+        <div class="travel-head"><span class="badge go">GO →</span> 去程</div>
+        <div class="travel-body" id="outboundBody"></div>
+        <button class="icon-btn leg-edit" data-leg-edit="outbound" title="編輯">✎</button>
       </div>
-      <div class="travel-grid">
-        <div class="travel-item" data-leg="outbound">
-          <div class="travel-head"><span class="badge go">GO →</span> 去程</div>
-          <div class="travel-body" id="outboundBody"></div>
-          <button class="icon-btn leg-edit" data-leg-edit="outbound" title="編輯">✎</button>
-        </div>
-        <div class="travel-item" data-leg="return">
-          <div class="travel-head"><span class="badge ret">← BACK</span> 回程</div>
-          <div class="travel-body" id="returnBody"></div>
-          <button class="icon-btn leg-edit" data-leg-edit="return" title="編輯">✎</button>
-        </div>
+      <div class="travel-item" data-leg="return">
+        <div class="travel-head"><span class="badge ret">← BACK</span> 回程</div>
+        <div class="travel-body" id="returnBody"></div>
+        <button class="icon-btn leg-edit" data-leg-edit="return" title="編輯">✎</button>
       </div>
     </div>
+  </div>
+
+  <section class="plan">
 
     <!-- 日期分頁 -->
     <div class="day-tabs" id="dayTabs"></div>

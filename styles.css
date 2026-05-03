@@ -141,14 +141,18 @@ input { font-family: inherit; }
 .layout {
   display: grid;
   grid-template-columns: 1fr 360px;
+  grid-template-areas:
+    "travel sidebar"
+    "plan   sidebar";
+  grid-template-rows: auto 1fr;
   gap: 24px;
   padding: 24px 32px 60px;
   max-width: 1280px;
   margin: 0 auto;
 }
-
-/* ---------- 行程區 ---------- */
-.plan { min-width: 0; }
+.travel-card { grid-area: travel; }
+.plan        { grid-area: plan; min-width: 0; }
+.sidebar     { grid-area: sidebar; }
 
 .day-tabs {
   display: flex;
@@ -1997,7 +2001,7 @@ input { font-family: inherit; }
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 28px 72px 16px 60px;
+    padding: 14mm 18mm 12mm 50px;
     text-align: center;
     position: relative;
   }
@@ -2005,11 +2009,11 @@ input { font-family: inherit; }
   /* 標題：黃色螢光筆效果 */
   .pv-cover-title {
     font-family: "Nunito", sans-serif;
-    font-size: 38px; font-weight: 900;
+    font-size: 44px; font-weight: 900;
     color: #2A1A06;
     background: linear-gradient(transparent 55%, #FFE566 55%);
     padding: 0 6px;
-    margin: 0 0 14px;
+    margin: 0 0 16px;
     line-height: 1.35;
     display: inline;
   }
@@ -2017,20 +2021,20 @@ input { font-family: inherit; }
     width: 40px; height: 2px;
     background: #C8A07A;
     border-radius: 999px;
-    margin: 14px auto 12px;
+    margin: 16px auto 14px;
   }
   .pv-cover-dates {
-    font-size: 14px; color: #5A3A18;
-    margin: 0 0 5px; font-weight: 700;
+    font-size: 17px; color: #5A3A18;
+    margin: 0 0 6px; font-weight: 700;
   }
-  .pv-cover-people { font-size: 12px; color: #8A6848; margin: 0; }
+  .pv-cover-people { font-size: 14px; color: #8A6848; margin: 0; }
 
   /* ── 去/回程：左右框格（佔 ~25vh）── */
   .pv-cover-travel {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
-    padding: 10px 20px 14px;
+    padding: 10px 16mm 0;
     min-height: 22vh;
     flex-shrink: 0;
   }
@@ -2051,25 +2055,25 @@ input { font-family: inherit; }
   .pv-cover-travel-label {
     background: #8A5C30;
     color: #FEFAF3;
-    font-size: 11px; font-weight: 900;
-    padding: 5px 12px;
+    font-size: 13px; font-weight: 900;
+    padding: 6px 14px;
     letter-spacing: 1px;
     flex-shrink: 0;
   }
   .pv-cover-travel-main {
-    font-size: 15px; font-weight: 800;
+    font-size: 18px; font-weight: 800;
     color: #2A1A06;
-    padding: 8px 12px 4px;
+    padding: 10px 14px 5px;
     line-height: 1.35;
   }
   .pv-cover-travel-row {
-    font-size: 11.5px; color: #5A3A18;
+    font-size: 13.5px; color: #5A3A18;
     font-weight: 700; line-height: 2;
-    padding: 0 12px;
+    padding: 0 14px;
   }
   .pv-cover-travel-note {
-    font-size: 10px; color: #9A7858;
-    padding: 3px 12px 8px;
+    font-size: 12px; color: #9A7858;
+    padding: 4px 14px 10px;
     font-style: italic;
   }
 
@@ -2087,20 +2091,20 @@ input { font-family: inherit; }
   .pv-stat:last-child { border-right: none; }
   .pv-stat-n {
     font-family: "Nunito", sans-serif;
-    font-size: 22px; font-weight: 900;
+    font-size: 26px; font-weight: 900;
     color: #FFE566; line-height: 1;
   }
-  .pv-stat-cost .pv-stat-n { font-size: 14px; }
+  .pv-stat-cost .pv-stat-n { font-size: 17px; }
   .pv-stat-l {
-    font-size: 9px; color: rgba(255,255,255,0.6);
-    margin-top: 3px; font-weight: 700;
+    font-size: 11px; color: rgba(255,255,255,0.6);
+    margin-top: 4px; font-weight: 700;
   }
 
   /* ═══════════════════════════════
      章節通用
   ═══════════════════════════════ */
-  .pv-section { margin: 22px 36px 0; }
-  .pv-section--itinerary { break-before: page; }
+  .pv-section { margin: 14mm 16mm 0; }
+  .pv-section--itinerary { break-before: page; margin-top: 16mm; }
 
   .pv-section-head {
     break-after: avoid;
@@ -2112,12 +2116,12 @@ input { font-family: inherit; }
   }
   .pv-section-head h2 {
     font-family: "Nunito", sans-serif;
-    font-size: 20px; font-weight: 900;
+    font-size: 24px; font-weight: 900;
     margin: 0; color: #FEFAF3;
   }
-  .pv-section-icon { font-size: 15px; }
+  .pv-section-icon { font-size: 18px; }
   .pv-section-sub {
-    font-size: 10px; color: rgba(255,255,255,0.65);
+    font-size: 12px; color: rgba(255,255,255,0.65);
     margin-left: auto; font-weight: 700;
   }
 
@@ -2125,52 +2129,62 @@ input { font-family: inherit; }
      行前準備 — 手帳清單風格
      左欄由上到下填滿，再往右欄延伸
   ═══════════════════════════════ */
+  /* ── 行前準備：清單表格風格 ── */
   .pv-prep-cols {
-    columns: 2;
-    column-gap: 36px;
-    column-fill: auto;      /* 左滿才往右 */
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
-  /* category 本身不設 break-inside:avoid，讓內容連續流排 */
   .pv-prep-cat {
-    margin-bottom: 6px;
-  }
-  /* 分類標題：break-after:avoid 讓標題不孤立 */
-  .pv-prep-cat-name {
-    font-family: "Nunito", sans-serif;
-    font-weight: 900; font-size: 15px;
-    color: #2A1A06;
-    padding: 10px 0 5px;
-    margin-bottom: 6px;
-    border-bottom: 2px solid #8A5C30;
-    display: block;
-    break-after: avoid;     /* 標題緊跟第一個項目 */
-  }
-  /* 子分類整塊不拆斷 */
-  .pv-prep-sub { margin-bottom: 6px; break-inside: avoid; }
-  .pv-prep-sub-name {
-    font-size: 12.5px; font-weight: 800;
-    color: #7A5038;
-    margin-bottom: 3px;
-    padding-left: 12px;
-    position: relative;
-    break-after: avoid;
-  }
-  .pv-prep-sub-name::before {
-    content: "▸";
-    position: absolute; left: 0;
-    color: #C8A07A;
-    font-size: 11px;
-  }
-  /* 單一項目不拆斷 */
-  .pv-prep-item {
-    font-size: 13px; color: #2A1A06;
-    padding: 2px 0 2px 2px;
-    display: flex; align-items: flex-start; gap: 7px;
-    line-height: 1.9; font-weight: 600;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1.5px solid rgba(140,90,40,0.22);
     break-inside: avoid;
   }
-  .pv-check   { color: #2D6A4F; flex-shrink: 0; font-size: 13px; }
-  .pv-uncheck { color: #C8B8A0; flex-shrink: 0; font-size: 13px; }
+  .pv-prep-cat-name {
+    font-family: "Nunito", sans-serif;
+    font-weight: 900;
+    font-size: 15px;
+    color: #FFF8F0;
+    background: #6B4226;
+    padding: 5px 14px;
+    display: block;
+    letter-spacing: 0.04em;
+    break-after: avoid;
+  }
+  .pv-prep-items-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0 10px;
+    padding: 8px 14px 10px;
+    background: var(--row-bg, #FFFDF5);
+  }
+  /* 子分類標題：橫跨3欄 */
+  .pv-prep-sub-name {
+    grid-column: 1 / -1;
+    font-family: "Nunito", sans-serif;
+    font-size: 11px;
+    font-weight: 800;
+    color: #6B4226;
+    border-bottom: 1px solid rgba(107,66,38,0.25);
+    padding: 6px 0 3px;
+    margin-top: 4px;
+    break-after: avoid;
+  }
+  .pv-prep-item {
+    font-family: "Noto Sans TC", sans-serif;
+    font-size: 13px;
+    color: #2A1A06;
+    padding: 2px 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    line-height: 1.75;
+    font-weight: 500;
+    break-inside: avoid;
+  }
+  .pv-check   { color: #3A7A5A; flex-shrink: 0; }
+  .pv-uncheck { color: #BBA88A; flex-shrink: 0; }
 
   /* ═══════════════════════════════
      每日行程
@@ -2191,14 +2205,13 @@ input { font-family: inherit; }
   }
   .pv-day-n {
     font-family: "Nunito", sans-serif;
-    font-size: 19px; font-weight: 900; color: white;
+    font-size: 23px; font-weight: 900; color: white;
   }
-  .pv-day-date { font-size: 13px; color: rgba(255,255,255,0.88); font-weight: 700; }
-  /* 小裝飾 */
-  .pv-day-head::after { content: "✦"; margin-left: auto; color: rgba(255,255,255,0.25); font-size: 12px; }
+  .pv-day-date { font-size: 15px; color: rgba(255,255,255,0.88); font-weight: 700; }
+  .pv-day-head::after { content: "✦"; margin-left: auto; color: rgba(255,255,255,0.25); font-size: 14px; }
 
   .pv-spot {
-    display: grid; grid-template-columns: 60px 1fr;
+    display: grid; grid-template-columns: 68px 1fr;
     background: white;
     border-bottom: 1px solid #EDE5D8;
     break-inside: avoid;
@@ -2206,41 +2219,41 @@ input { font-family: inherit; }
   .pv-spot:last-of-type { border-radius: 0 0 7px 7px; border-bottom: none; }
 
   .pv-time {
-    padding: 12px 7px; text-align: center;
+    padding: 13px 7px; text-align: center;
     border-right: 1px solid #EDE5D8;
     font-family: "Nunito", sans-serif;
-    font-size: 13px; font-weight: 800;
+    font-size: 15px; font-weight: 800;
     color: #3A2010; background: #FEFBF5;
   }
   .pv-time small {
     display: block; font-weight: 600;
-    font-size: 9px; color: #B0A090; margin-top: 4px;
+    font-size: 11px; color: #B0A090; margin-top: 4px;
   }
-  .pv-spot-body { padding: 11px 15px; line-height: 1.9; }
+  .pv-spot-body { padding: 12px 17px; line-height: 1.9; }
   .pv-spot-name {
     font-family: "Nunito", sans-serif;
-    font-size: 14px; font-weight: 800; color: #1A1008; margin-bottom: 2px;
+    font-size: 17px; font-weight: 800; color: #1A1008; margin-bottom: 3px;
   }
   .pv-cat-badge {
     display: inline-block;
     background: #F5EEE3; color: #7A5030;
     border-radius: 3px; padding: 0 6px;
-    font-size: 9px; font-weight: 800;
+    font-size: 11px; font-weight: 800;
     margin-left: 7px; vertical-align: middle;
     border: 1px solid #DDD0BE;
   }
-  .pv-spot-addr { font-size: 10.5px; color: #9A8878; margin-top: 1px; line-height: 1.75; }
-  .pv-spot-cost { font-size: 11.5px; color: #2D6A4F; font-weight: 800; margin-top: 3px; }
+  .pv-spot-addr { font-size: 12.5px; color: #9A8878; margin-top: 2px; line-height: 1.75; }
+  .pv-spot-cost { font-size: 13.5px; color: #2D6A4F; font-weight: 800; margin-top: 4px; }
   .pv-spot-note {
-    font-size: 10.5px; color: #5A4030; background: #FBF6EE;
+    font-size: 12.5px; color: #5A4030; background: #FBF6EE;
     border-left: 3px solid #C8A07A;
-    padding: 4px 9px; margin-top: 7px;
+    padding: 5px 10px; margin-top: 8px;
     border-radius: 0 5px 5px 0; line-height: 1.85;
   }
   .pv-transit {
     grid-column: 1 / -1;
-    font-size: 10px; color: #B0A088;
-    padding: 4px 16px 4px 75px;
+    font-size: 12px; color: #B0A088;
+    padding: 4px 16px 4px 83px;
     background: #FEFBF5;
     border-bottom: 1px dashed #EDE5D8; font-weight: 700;
   }
@@ -2251,19 +2264,19 @@ input { font-family: inherit; }
   ═══════════════════════════════ */
   .pv-cost-total {
     font-family: "Nunito", sans-serif;
-    font-size: 30px; font-weight: 900; color: #8A3A10;
-    margin: 0 0 14px; line-height: 1;
+    font-size: 36px; font-weight: 900; color: #8A3A10;
+    margin: 0 0 16px; line-height: 1;
   }
-  .pv-cost-total small { font-size: 12px; color: #A09080; font-weight: 600; margin-left: 8px; }
+  .pv-cost-total small { font-size: 14px; color: #A09080; font-weight: 600; margin-left: 8px; }
   .pv-expense-list { list-style: none; padding: 0; margin: 0; }
   .pv-expense-item {
     display: flex; justify-content: space-between; align-items: center;
-    padding: 8px 0; border-bottom: 1px solid #EDE5D8;
-    font-size: 14px; line-height: 1.9; break-inside: avoid;
+    padding: 9px 0; border-bottom: 1px solid #EDE5D8;
+    font-size: 16px; line-height: 1.9; break-inside: avoid;
   }
   .pv-expense-name { color: #2A1A08; font-weight: 600; }
-  .pv-expense-name small { color: #B0A088; font-size: 10px; margin-left: 8px; }
-  .pv-expense-amt { font-family: "Nunito", sans-serif; font-weight: 900; color: #2D6A4F; font-size: 15px; }
+  .pv-expense-name small { color: #B0A088; font-size: 12px; margin-left: 8px; }
+  .pv-expense-amt { font-family: "Nunito", sans-serif; font-weight: 900; color: #2D6A4F; font-size: 18px; }
 
   /* ═══════════════════════════════
      結語（接在最後章節）
@@ -2271,11 +2284,11 @@ input { font-family: inherit; }
   .pv-closing {
     break-before: avoid;
     break-inside: avoid;
-    margin: 20px 0 28px;
+    margin: 22px 0 30px;
     border: 2px dashed #C8A07A;
     border-radius: 8px;
-    padding: 18px 24px;
-    font-size: 14px; font-weight: 700;
+    padding: 22px 28px;
+    font-size: 16px; font-weight: 700;
     color: #5A3A18; line-height: 2.1;
     text-align: center;
     background: #FFFDF7;
@@ -2284,9 +2297,9 @@ input { font-family: inherit; }
   .pv-closing::before {
     content: "✈️  旅遊小天使";
     display: block;
-    font-size: 11px; font-weight: 900;
+    font-size: 13px; font-weight: 900;
     color: #8A5C30; letter-spacing: 1px;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
 }
 
@@ -2315,8 +2328,14 @@ input { font-family: inherit; }
 @media (max-width: 1024px) {
   .layout {
     grid-template-columns: 1fr;
+    grid-template-areas: none;
+    grid-template-rows: none;
     padding: 20px 24px 50px;
   }
+  /* 手機/平板順序：出發回程 → 側邊欄 → 行程 */
+  .travel-card { order: 1; }
+  .sidebar     { order: 2; }
+  .plan        { order: 3; }
   .topbar { padding: 16px 24px; }
   .travel-grid { grid-template-columns: 1fr 1fr; }
   .hero-text h1 { font-size: 28px; }
