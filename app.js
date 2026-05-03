@@ -31,6 +31,7 @@ state.currentDay = state.currentDay || 1;
 state.days = state.days || { 1: [] };
 state.expenses = state.expenses || [];
 state.travel = state.travel || { outbound: null, return: null };
+state.spotPayments = state.spotPayments || {}; // 自動條目的付款指定 { key: { paidBy, splitWith } }
 
 // 同行夥伴 / 幣別 / 匯率（舊資料補上預設）
 state.people = state.people || [
@@ -111,6 +112,8 @@ Object.values(state.days).forEach(d => d.forEach(s => {
   }
   // 購物 / 行動清單
   if (!s.shopItems) s.shopItems = [];
+  // 景點費用幣別（舊資料補預設）
+  if (!s.costCcy) s.costCcy = state.baseCurrency;
 }));
 
 function persist() { saveTrip(TRIP_ID, state); }
@@ -441,7 +444,7 @@ function buildSpotCard(spot, idx, total) {
   const mapUrl = `https://www.google.com/maps/search/?api=1&query=${mapQuery}`;
   const photos = Array.isArray(spot.photos) ? spot.photos : [];
   const shopItems = Array.isArray(spot.shopItems) ? spot.shopItems : [];
-  const hasMemory = !!(photos.length || spot.note || shopItems.length);
+  const hasMemory = !!(photos.length || spot.note);
 
   card.innerHTML = `
     <div class="spot-main">
@@ -461,7 +464,7 @@ function buildSpotCard(spot, idx, total) {
              onclick="event.stopPropagation()">🗺️ 開地圖</a>
           ${spot.cost > 0 ? `<span class="chip cost">💴 ${spot.cost} TWD</span>` : ""}
           ${photos.length > 0 ? `<span class="chip photo-chip">📷 ${photos.length}</span>` : ""}
-          ${shopItems.length > 0 ? `<span class="chip" style="background:#E8F6EE;color:#2F6B55;">🛍️ ${shopItems.filter(i=>i.done).length}/${shopItems.length}</span>` : ""}
+          ${shopItems.length > 0 ? `<button class="chip shop-chip" data-shop-toggle title="展開購物 / 行動清單">🛍️ <span class="shop-count">${shopItems.filter(i=>i.done).length}/${shopItems.length}</span></button>` : ""}
         </div>
       </div>
       <div class="spot-actions">
@@ -475,17 +478,6 @@ function buildSpotCard(spot, idx, total) {
       <div class="spot-memory">
         ${photos.length > 0 ? `<div class="memory-photos">${photos.map(p => `<img class="memory-photo" src="${p}" alt="旅行照片" />`).join("")}</div>` : ""}
         ${spot.note ? `<p class="memory-note">${escapeHtml(spot.note)}</p>` : ""}
-      </div>
-    ` : ""}
-    ${shopItems.length > 0 ? `
-      <div class="spot-shop-card">
-        <div class="spot-shop-card-title">🛍️ 購物 / 行動清單</div>
-        ${shopItems.map(it => `
-          <div class="spot-shop-card-item ${it.done ? "done" : ""}">
-            <span>${it.done ? "☑" : "☐"}</span>
-            <span>${escapeHtml(it.text)}</span>
-          </div>
-        `).join("")}
       </div>
     ` : ""}
   `;
@@ -508,6 +500,44 @@ function buildSpotCard(spot, idx, total) {
   });
   // 拖拉
   attachDragHandlers(card, spot.id);
+
+  // 購物 / 行動清單（展開 panel）
+  if (shopItems.length > 0) {
+    const toggleBtn = card.querySelector("[data-shop-toggle]");
+    const panel = document.createElement("div");
+    panel.className = "spot-shop-panel";
+    panel.hidden = true;
+    card.appendChild(panel);
+
+    function refreshShopPanel() {
+      const items = spot.shopItems || [];
+      panel.innerHTML = `<div class="spot-shop-panel-head">🛍️ 購物 / 行動清單</div>`;
+      const ul = document.createElement("ul");
+      ul.className = "spot-shop-panel-list";
+      items.forEach(it => {
+        const li = document.createElement("li");
+        li.className = "spot-shop-panel-item" + (it.done ? " done" : "");
+        li.innerHTML = `<label><input type="checkbox" ${it.done ? "checked" : ""} /><span>${escapeHtml(it.text)}</span></label>`;
+        li.querySelector("input").addEventListener("change", e => {
+          e.stopPropagation();
+          it.done = e.target.checked;
+          li.classList.toggle("done", it.done);
+          persist();
+          const done = items.filter(i => i.done).length;
+          const countEl = toggleBtn?.querySelector(".shop-count");
+          if (countEl) countEl.textContent = `${done}/${items.length}`;
+        });
+        ul.appendChild(li);
+      });
+      panel.appendChild(ul);
+    }
+    refreshShopPanel();
+
+    toggleBtn.addEventListener("click", e => {
+      e.stopPropagation();
+      panel.hidden = !panel.hidden;
+    });
+  }
 
   return card;
 }
@@ -913,6 +943,11 @@ let tempPhotos = [];    // 編輯中的照片陣列（最多 3 張）
 let tempShopItems = []; // 編輯中的購物清單
 let chosenCategory = "sight";
 
+// 景點幣別下拉（初始化一次）
+$("spotCostCcy").innerHTML = CURRENCIES.map(c =>
+  `<option value="${c.code}">${c.symbol} ${c.code}</option>`
+).join("");
+
 // 建構分類選擇器
 const catPicker = $("catPicker");
 catPicker.innerHTML = SPOT_CATEGORIES.map(c =>
@@ -963,6 +998,7 @@ function openSpotModalForEdit(id) {
   $("spotStart").value = spot.start;
   $("spotDur").value = spot.dur || 0;
   $("spotCost").value = spot.cost || 0;
+  $("spotCostCcy").value = spot.costCcy || state.baseCurrency;
   $("spotNote").value = spot.note || "";
   setCategory(spot.category || "sight");
   tempPhotos = Array.isArray(spot.photos) ? [...spot.photos] : [];
@@ -979,6 +1015,7 @@ function resetSpotForm() {
   $("spotStart").value = "09:00";
   $("spotDur").value = 90;
   $("spotCost").value = 0;
+  $("spotCostCcy").value = state.baseCurrency;
   $("spotNote").value = "";
   $("addrHint").textContent = "";
   setCategory("sight");
@@ -1197,6 +1234,7 @@ $("saveSpot").addEventListener("click", () => {
     name,
     addr: $("spotAddr").value.trim(),
     start: $("spotStart").value,
+    costCcy: $("spotCostCcy").value,
     dur: Math.max(0, +$("spotDur").value || 0),
     cost: +$("spotCost").value,
     note: $("spotNote").value.trim(),
@@ -1275,7 +1313,8 @@ function autoSetTravelSpot(leg, point, travelData) {
       start: arriveTime,
       dur: 0,
       cost: 0,
-      photo: "",
+      photos: [],
+      shopItems: [],
       note: `✈️ 抵達 ${point}`,
       travelLegs: null,
     };
@@ -1304,7 +1343,8 @@ function autoSetTravelSpot(leg, point, travelData) {
       start: startTime,
       dur: 0,
       cost: 0,
-      photo: "",
+      photos: [],
+      shopItems: [],
       note: `✈️ 從 ${point} 回程出發`,
       travelLegs: null,
     });
@@ -1363,7 +1403,9 @@ $("clearTravelBtn").addEventListener("click", () => {
 // ============================================================
 const prepCatsEl = $("prepCategories");
 // 記錄哪些分類是折疊狀態（key = cat.id）
-const collapsedCats = new Set();
+const collapsedCats = new Set();  // Modal 子分類是否被使用者收合（"catId/subId"）— 預設展開
+const openCats = new Set();       // 側邊欄分類是否展開（cat.id）— 預設收合
+const openSubcats = new Set();    // 側邊欄子分類是否展開（"catId/subId"）— 預設收合
 
 function renderPrep() {
   const containers = [prepCatsEl, $("prepCategoriesExpanded")].filter(Boolean);
@@ -1378,15 +1420,23 @@ function renderPrep() {
   containers.forEach(container => {
     container.innerHTML = "";
     const isCompact = container === prepCatsEl; // 側邊欄才折疊
-    state.prep.forEach(cat => {
-      container.appendChild(buildCategorySection(cat, isCompact));
-    });
+    if (!isCompact) {
+      // 展開 Modal：待辦事項固定左欄、行李清單固定右欄，其他在下方
+      const todoCat   = state.prep.find(c => c.id === "cat-todo"    || c.name.includes("待辦"));
+      const packCat   = state.prep.find(c => c.id === "cat-packing" || c.name.includes("行李"));
+      const others    = state.prep.filter(c => c !== todoCat && c !== packCat);
+      const ordered   = [todoCat, packCat, ...others].filter(Boolean);
+      ordered.forEach(cat => container.appendChild(buildCategorySection(cat, false)));
+    } else {
+      state.prep.forEach(cat => container.appendChild(buildCategorySection(cat, true)));
+    }
   });
 }
 
 function buildCategorySection(cat, collapsible = true) {
   const section = document.createElement("div");
-  const isCollapsed = collapsible && collapsedCats.has(cat.id);
+  // sidebar: default closed (use openCats); modal: always open (collapsible=false)
+  const isCollapsed = collapsible && !openCats.has(cat.id);
   section.className = "prep-cat" + (isCollapsed ? " collapsed" : "");
 
   // 統計所有子分類的完成數
@@ -1410,15 +1460,15 @@ function buildCategorySection(cat, collapsible = true) {
     const head = section.querySelector(".prep-cat-head");
     head.addEventListener("click", e => {
       if (e.target.closest("[data-cat-del]") || e.target.closest("[data-cat-rename]")) return;
-      collapsedCats.has(cat.id) ? collapsedCats.delete(cat.id) : collapsedCats.add(cat.id);
-      section.classList.toggle("collapsed", collapsedCats.has(cat.id));
+      openCats.has(cat.id) ? openCats.delete(cat.id) : openCats.add(cat.id);
+      section.classList.toggle("collapsed", !openCats.has(cat.id));
     });
   }
 
-  // 渲染子分類
+  // 渲染子分類（sidebar 和 modal 都預設收合，共用 openSubcats）
   const subcatsWrap = section.querySelector(".prep-subcats-wrap");
   (cat.subcats || []).forEach(sub => {
-    subcatsWrap.appendChild(buildSubcatSection(sub, cat));
+    subcatsWrap.appendChild(buildSubcatSection(sub, cat, true));
   });
 
   // 改分類名稱
@@ -1446,10 +1496,12 @@ function buildCategorySection(cat, collapsible = true) {
   return section;
 }
 
-function buildSubcatSection(sub, parentCat) {
+function buildSubcatSection(sub, parentCat, isCompact = false) {
   const section = document.createElement("div");
   const colKey = parentCat.id + "/" + sub.id;
-  const isCollapsed = collapsedCats.has(colKey);
+  // 側邊欄：預設收合，只有在 openSubcats 裡才展開
+  // Modal：預設展開，只有在 collapsedCats 裡才收合
+  const isCollapsed = isCompact ? !openSubcats.has(colKey) : collapsedCats.has(colKey);
   section.className = "prep-subcat" + (isCollapsed ? " collapsed" : "");
 
   const doneN = (sub.items || []).filter(i => i.done).length;
@@ -1478,11 +1530,16 @@ function buildSubcatSection(sub, parentCat) {
     </div>
   `;
 
-  // 折疊
+  // 折疊 / 展開
   section.querySelector(".prep-subcat-head").addEventListener("click", e => {
     if (e.target.closest(".prep-sub-del") || e.target.closest("[contenteditable]")) return;
-    collapsedCats.has(colKey) ? collapsedCats.delete(colKey) : collapsedCats.add(colKey);
-    section.classList.toggle("collapsed", collapsedCats.has(colKey));
+    if (isCompact) {
+      openSubcats.has(colKey) ? openSubcats.delete(colKey) : openSubcats.add(colKey);
+      section.classList.toggle("collapsed", !openSubcats.has(colKey));
+    } else {
+      collapsedCats.has(colKey) ? collapsedCats.delete(colKey) : collapsedCats.add(colKey);
+      section.classList.toggle("collapsed", collapsedCats.has(colKey));
+    }
   });
 
   // 打勾
@@ -1533,6 +1590,13 @@ function buildSubcatSection(sub, parentCat) {
   return section;
 }
 
+// 展開旅費錢包 Modal
+const walletModal = $("walletModal");
+$("walletExpandBtn").addEventListener("click", () => {
+  renderExpenses();
+  walletModal.hidden = false;
+});
+
 // 展開行前準備 Modal
 const prepModal = $("prepModal");
 $("prepExpandBtn").addEventListener("click", () => {
@@ -1542,7 +1606,7 @@ $("prepExpandBtn").addEventListener("click", () => {
 $("addCategoryBtn2").addEventListener("click", () => {
   const name = prompt("新分類名稱（建議加 emoji）", "🎁 其他");
   if (!name || !name.trim()) return;
-  state.prep.push({ id: "cat-" + Date.now(), name: name.trim(), items: [] });
+  state.prep.push({ id: "cat-" + Date.now(), name: name.trim(), subcats: [] });
   persist();
   renderPrep();
 });
@@ -1554,7 +1618,7 @@ $("addCategoryBtn").addEventListener("click", () => {
   state.prep.push({
     id: "cat-" + Date.now(),
     name: name.trim(),
-    items: [],
+    subcats: [],
   });
   persist();
   renderPrep();
@@ -1898,21 +1962,24 @@ $("undoAiBtn").addEventListener("click", () => {
 function collectAutoEntries() {
   const entries = [];
   const allIds = state.people.map(p => p.id);
-  const defaultPayer = state.people[0]?.id || "p1";
 
   Object.keys(state.days).map(Number).sort((a, b) => a - b).forEach(d => {
     const spots = state.days[d] || [];
     spots.forEach((s, i) => {
       // 景點門票
       if (+s.cost > 0) {
+        const key = `ticket_${s.id}`;
+        const payment = state.spotPayments[key] || null;
         entries.push({
           kind: "ticket",
+          key,
           icon: "🎟️",
           label: `${spotCat(s.category).emoji} ${s.name}`,
           amt: +s.cost,
-          ccy: state.baseCurrency,
-          paidBy: defaultPayer,
-          splitWith: allIds,
+          ccy: s.costCcy || state.baseCurrency,
+          paidBy: payment ? payment.paidBy : null,
+          splitWith: payment ? payment.splitWith : allIds,
+          payment,
           day: d,
           spotId: s.id,
         });
@@ -1922,17 +1989,21 @@ function collectAutoEntries() {
       if (!Array.isArray(s.travelLegs)) return;
       const totalCost = s.travelLegs.reduce((n, l) => n + (+l.cost || 0), 0);
       if (totalCost <= 0) return;
+      const key = `transit_${s.id}`;
+      const payment = state.spotPayments[key] || null;
       const usedModes = [...new Set(
         s.travelLegs.filter(l => +l.cost > 0 || +l.mins > 0).map(l => l.mode.split(" ")[0])
       )].join("");
       entries.push({
         kind: "transit",
+        key,
         icon: "🚇",
         label: `${usedModes} ${s.name} → ${spots[i + 1].name}`,
         amt: totalCost,
         ccy: state.baseCurrency,
-        paidBy: defaultPayer,
-        splitWith: allIds,
+        paidBy: payment ? payment.paidBy : null,
+        splitWith: payment ? payment.splitWith : allIds,
+        payment,
         day: d,
         spotId: s.id,
       });
@@ -1946,6 +2017,8 @@ function computeSettlement(allEntries) {
   const net = {};
   state.people.forEach(p => net[p.id] = 0);
   allEntries.forEach(e => {
+    // 自動條目尚未指定付款人 → 不納入分帳
+    if ("key" in e && e.payment === null) return;
     const baseAmt = convertAmount(e.amt, e.ccy, state.baseCurrency);
     const ids = (e.splitWith && e.splitWith.length) ? e.splitWith : state.people.map(p => p.id);
     const share = baseAmt / ids.length;
@@ -2051,31 +2124,106 @@ function renderExpenses() {
     auto.forEach(t => {
       const baseAmt = convertAmount(t.amt, t.ccy, baseCcy);
       const li = document.createElement("li");
-      li.className = "auto-entry";
+      li.className = "auto-entry" + (t.payment ? " auto-assigned" : " auto-unassigned");
+
+      let payerHtml;
+      if (t.payment) {
+        const payer = getPerson(t.payment.paidBy);
+        const splitN = t.payment.splitWith.length;
+        payerHtml = `<span class="avatar mini" style="background:${payer.color}">${escapeHtml(payer.name[0])}</span>
+                     ${escapeHtml(payer.name)} 付 · 分 ${splitN} 人`;
+      } else {
+        payerHtml = `<span class="auto-pay-badge">點我設定誰付</span>`;
+      }
+
       li.innerHTML = `
         <span>
           <div>${t.icon} ${escapeHtml(t.label)}</div>
-          <div class="who"><span class="auto-tag">Day ${t.day} · 自動</span></div>
+          <div class="who"><span class="auto-tag">Day ${t.day} · 自動</span> ${payerHtml}</div>
         </span>
         <div class="expense-right">
           <b>${formatMoney(t.amt, t.ccy)}</b>
           ${t.ccy !== baseCcy ? `<small class="conv">≈ ${formatMoney(baseAmt, baseCcy)}</small>` : ""}
         </div>
       `;
-      // 點交通類條目 → 跳去編輯交通；點景點門票 → 編輯景點
-      li.addEventListener("click", () => {
-        state.currentDay = t.day;
-        const spots = state.days[t.day];
-        const spot = spots.find(s => s.id === t.spotId);
-        renderAll();
-        if (!spot) return;
-        if (t.kind === "transit") openTransitEditor(spot);
-        else openSpotModalForEdit(spot.id);
-      });
+      li.addEventListener("click", () => openAutoPayModal(t));
       expenseListEl.appendChild(li);
     });
   }
 }
+// ============================================================
+// 💰 自動條目付款指定 Modal
+// ============================================================
+let currentAutoEntry = null;
+let autoSelectedPaidBy = null;
+let autoSelectedSplitWith = [];
+
+function openAutoPayModal(entry) {
+  currentAutoEntry = entry;
+  $("autoPayTitle").textContent = `${entry.icon} ${entry.label}`;
+  $("autoPayDesc").textContent = `${formatMoney(entry.amt, entry.ccy)} · Day ${entry.day}`;
+  const payment = entry.payment;
+  autoSelectedPaidBy = payment ? payment.paidBy : (state.people[0]?.id || "p1");
+  autoSelectedSplitWith = payment ? [...payment.splitWith] : state.people.map(p => p.id);
+  $("autoPayClearBtn").hidden = !payment;
+  renderAutoPayPeople();
+  $("autoPayModal").hidden = false;
+}
+
+function renderAutoPayPeople() {
+  $("autoPayPaidBy").innerHTML = state.people.map(p => `
+    <button type="button" class="person-pick ${p.id === autoSelectedPaidBy ? "active" : ""}"
+            data-auto-paid="${p.id}" style="--c:${p.color}">
+      <span class="avatar mini" style="background:${p.color}">${escapeHtml(p.name[0])}</span>
+      ${escapeHtml(p.name)}
+    </button>
+  `).join("");
+  $("autoPaySplitWith").innerHTML = state.people.map(p => `
+    <button type="button" class="person-pick ${autoSelectedSplitWith.includes(p.id) ? "active" : ""}"
+            data-auto-split="${p.id}" style="--c:${p.color}">
+      <span class="avatar mini" style="background:${p.color}">${escapeHtml(p.name[0])}</span>
+      ${escapeHtml(p.name)}
+    </button>
+  `).join("");
+  $("autoPayPaidBy").querySelectorAll("[data-auto-paid]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      autoSelectedPaidBy = btn.dataset.autoPaid;
+      renderAutoPayPeople();
+    });
+  });
+  $("autoPaySplitWith").querySelectorAll("[data-auto-split]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.autoSplit;
+      if (autoSelectedSplitWith.includes(id)) {
+        if (autoSelectedSplitWith.length <= 1) return;
+        autoSelectedSplitWith = autoSelectedSplitWith.filter(x => x !== id);
+      } else {
+        autoSelectedSplitWith.push(id);
+      }
+      renderAutoPayPeople();
+    });
+  });
+}
+
+$("autoPaySaveBtn").addEventListener("click", () => {
+  if (!currentAutoEntry) return;
+  state.spotPayments[currentAutoEntry.key] = {
+    paidBy: autoSelectedPaidBy,
+    splitWith: [...autoSelectedSplitWith],
+  };
+  persist();
+  closeModal($("autoPayModal"));
+  renderExpenses();
+});
+
+$("autoPayClearBtn").addEventListener("click", () => {
+  if (!currentAutoEntry) return;
+  delete state.spotPayments[currentAutoEntry.key];
+  persist();
+  closeModal($("autoPayModal"));
+  renderExpenses();
+});
+
 $("receiptInput").addEventListener("change", e => {
   const file = e.target.files[0];
   if (!file) return;
@@ -2374,99 +2522,212 @@ $("exportPdfBtn").addEventListener("click", () => {
 function buildPrintView() {
   const el = $("printView");
   const t = state.travel;
+  const baseCcy = state.baseCurrency;
+  const baseInfo = ccyInfo(baseCcy);
+
+  // 從 meta.dates 解析出發日期
+  function parseTripStart() {
+    const str = state.meta.dates || "";
+    const m = str.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+    return null;
+  }
+  const startDate = parseTripStart();
+  const weekDays = ["日","一","二","三","四","五","六"];
+
+  function dayDateLabel(dayNum) {
+    if (!startDate) return "";
+    const d = new Date(startDate);
+    d.setDate(d.getDate() + dayNum - 1);
+    return `${d.getMonth()+1}/${d.getDate()} （${weekDays[d.getDay()]}）`;
+  }
+
+  // 花費統計
+  const auto = collectAutoEntries();
+  const allCosts = [...state.expenses, ...auto];
+  const totalCost = allCosts.reduce((n, e) => n + convertAmount(e.amt, e.ccy, baseCcy), 0);
+
+  // 行前準備
   const allPrep = state.prep.flatMap(c => (c.subcats || []).flatMap(s => s.items || []));
   const prepDone = allPrep.filter(p => p.done).length;
-  const totalCost = state.expenses.reduce((n, e) => n + e.amt, 0);
 
+  // 行程統計
+  const days = Object.keys(state.days).map(Number).sort((a, b) => a - b);
+  const totalSpots = days.reduce((n, d) => n + (state.days[d] || []).length, 0);
+  const peopleNames = (state.people || []).map(p => p.name).join("、") || "—";
+
+  // ── 出發與回程（封面左右各一欄，佔 1/4 高）──
+  let travelHtml = "";
+  if (t.outbound || t.return) {
+    travelHtml += `<div class="pv-cover-travel">`;
+    ["outbound", "return"].forEach(leg => {
+      const d = t[leg];
+      if (!d) {
+        travelHtml += `<div class="pv-cover-travel-card pv-cover-travel-empty"></div>`;
+        return;
+      }
+      travelHtml += `
+        <div class="pv-cover-travel-card">
+          <div class="pv-cover-travel-label">${leg === "outbound" ? "✈️ 去程" : "🛬 回程"}</div>
+          <div class="pv-cover-travel-main">${escapeHtml(d.type)} ${escapeHtml(d.number)}</div>
+          <div class="pv-cover-travel-row">🛫 ${escapeHtml(d.departAt)}&nbsp; ${escapeHtml(d.departFrom)}</div>
+          <div class="pv-cover-travel-row">🛬 ${escapeHtml(d.arriveAt)}&nbsp; ${escapeHtml(d.arriveTo)}</div>
+          ${d.note ? `<div class="pv-cover-travel-note">${escapeHtml(d.note)}</div>` : ""}
+        </div>`;
+    });
+    travelHtml += `</div>`;
+  }
+
+  // ── 封面（含出發回程 + 底部總覽條）──
   let html = `
-    <div class="print-title">
-      <h1>${escapeHtml(state.meta.cover || "🌸")} ${escapeHtml(state.meta.title)}</h1>
-      <p>${escapeHtml(state.meta.dates || "")}</p>
+    <div class="pv-cover">
+      <div class="pv-cover-top"></div>
+      <div class="pv-cover-inner">
+        <div class="pv-cover-emoji">${escapeHtml(state.meta.cover || "🌏")}</div>
+        <h1 class="pv-cover-title">${escapeHtml(state.meta.title || "旅遊行程")}</h1>
+        <div class="pv-cover-rule"></div>
+        <p class="pv-cover-dates">${escapeHtml(state.meta.dates || "")}</p>
+        <p class="pv-cover-people">${escapeHtml(peopleNames)}</p>
+      </div>
+      ${travelHtml}
+      <div class="pv-summary">
+        <div class="pv-stat"><div class="pv-stat-n">${days.length}</div><div class="pv-stat-l">天</div></div>
+        <div class="pv-stat"><div class="pv-stat-n">${totalSpots}</div><div class="pv-stat-l">個景點</div></div>
+        <div class="pv-stat"><div class="pv-stat-n">${state.people.length || "—"}</div><div class="pv-stat-l">名旅伴</div></div>
+        <div class="pv-stat pv-stat-cost">
+          <div class="pv-stat-n">${formatMoney(totalCost, baseCcy)}</div>
+          <div class="pv-stat-l">預估總花費 (${baseCcy})</div>
+        </div>
+      </div>
     </div>
   `;
 
-  // 去程 / 回程
-  if (t.outbound || t.return) {
-    html += `<h2>✈️ 出發與回程</h2><div class="print-travel">`;
-    ["outbound", "return"].forEach(leg => {
-      const d = t[leg];
-      if (!d) return;
-      html += `
-        <div class="print-travel-item">
-          <b>${leg === "outbound" ? "去程" : "回程"} · ${escapeHtml(d.type)} ${escapeHtml(d.number)}</b><br/>
-          🛫 ${escapeHtml(d.departAt)} ${escapeHtml(d.departFrom)}<br/>
-          🛬 ${escapeHtml(d.arriveAt)} ${escapeHtml(d.arriveTo)}
-          ${d.note ? `<br/><small>${escapeHtml(d.note)}</small>` : ""}
-        </div>`;
-    });
-    html += `</div>`;
-  }
-
-  // 每一天的行程
-  const days = Object.keys(state.days).map(Number).sort((a, b) => a - b);
-  days.forEach(d => {
-    const spots = state.days[d] || [];
-    if (spots.length === 0) return;
-    html += `<h2>📅 Day ${d}</h2><div class="print-day">`;
-    spots.forEach((s, i) => {
-      const cat = spotCat(s.category);
-      const isLastHotel = (i === spots.length - 1) && s.category === "hotel";
-      const durLabel = isLastHotel ? "🛌 過夜" : (s.dur || 0) + " 分";
-      html += `
-        <div class="print-spot">
-          <div class="p-time">${escapeHtml(s.start)}<br/><small>${durLabel}</small></div>
-          <div class="p-body">
-            <b>${cat.emoji} ${escapeHtml(s.name)}</b>
-            <span class="p-cat">${cat.label}</span><br/>
-            <small>${escapeHtml(s.addr || "")}</small>
-            ${s.cost ? ` · 💴 ${s.cost} TWD` : ""}
-            ${s.note ? `<div class="p-note">${escapeHtml(s.note)}</div>` : ""}
-          </div>
-        </div>`;
-      // 多段交通顯示
-      if (i < spots.length - 1) {
-        const tr = getTransit(s, spots[i + 1]);
-        html += `<div class="p-transit">`;
-        tr.legs.forEach((leg, li) => {
-          const route = (leg.from || leg.to)
-            ? ` (${escapeHtml(leg.from || "?")} → ${escapeHtml(leg.to || "?")})` : "";
-          html += `${li > 0 ? "<br/>" : ""}↓ ${leg.mode} ${leg.mins} 分${route}`;
-        });
-        html += ` <b>共 ${tr.totalMins} 分</b></div>`;
-      }
-    });
-    html += `</div>`;
-  });
-
-  // 行前準備（依分類）
+  // ── 行前準備 ──
   if (allPrep.length > 0) {
-    html += `<h2>📝 行前準備 (${prepDone}/${allPrep.length})</h2>`;
+    html += `
+      <div class="pv-section">
+        <div class="pv-section-head">
+          <span class="pv-section-icon">📝</span>
+          <h2>行前準備</h2>
+          <span class="pv-section-sub">${prepDone} / ${allPrep.length} 已完成</span>
+        </div>
+        <div class="pv-prep-cols">
+    `;
     state.prep.forEach(cat => {
-      const allCatItems = (cat.subcats || []).flatMap(s => s.items || []);
-      if (allCatItems.length === 0) return;
-      const done = allCatItems.filter(i => i.done).length;
-      html += `<h3 class="print-prep-cat">${escapeHtml(cat.name)} (${done}/${allCatItems.length})</h3>`;
+      const catItems = (cat.subcats || []).flatMap(s => s.items || []);
+      if (catItems.length === 0) return;
+      html += `<div class="pv-prep-cat"><div class="pv-prep-cat-name">${escapeHtml(cat.name)}</div>`;
       (cat.subcats || []).forEach(sub => {
         if (!sub.items || sub.items.length === 0) return;
-        html += `<p style="font-weight:700;font-size:12px;margin:8px 0 4px;color:#555">${escapeHtml(sub.name)}</p><ul class="print-prep">`;
+        html += `<div class="pv-prep-sub"><div class="pv-prep-sub-name">${escapeHtml(sub.name)}</div>`;
         sub.items.forEach(it => {
-          html += `<li>${it.done ? "☑" : "☐"} ${escapeHtml(it.text)}</li>`;
+          html += `<div class="pv-prep-item"><span class="${it.done ? "pv-check" : "pv-uncheck"}">${it.done ? "☑" : "☐"}</span>${escapeHtml(it.text)}</div>`;
         });
-        html += `</ul>`;
+        html += `</div>`;
       });
+      html += `</div>`;
     });
+    html += `</div></div>`;
   }
 
-  // 花費總覽
-  if (state.expenses.length > 0) {
-    html += `<h2>💰 花費總覽（共 ${totalCost.toLocaleString()} TWD）</h2><ul class="print-exp">`;
-    state.expenses.forEach(e => {
-      html += `<li>${escapeHtml(e.item)} — ${e.amt} TWD（${escapeHtml(e.who)}）</li>`;
+  // ── 每日行程 ──
+  if (days.length > 0) {
+    html += `
+      <div class="pv-section pv-section--itinerary">
+        <div class="pv-section-head"><span class="pv-section-icon">🗓️</span><h2>每日行程</h2></div>
+    `;
+    days.forEach(d => {
+      const spots = state.days[d] || [];
+      if (spots.length === 0) return;
+      const dateStr = dayDateLabel(d);
+      const colorIdx = ((d - 1) % 5);
+      html += `
+        <div class="pv-day pv-day-color-${colorIdx}">
+          <div class="pv-day-head">
+            <span class="pv-day-n">Day ${d}</span>
+            ${dateStr ? `<span class="pv-day-date">${dateStr}</span>` : ""}
+          </div>
+      `;
+      spots.forEach((s, i) => {
+        const cat = spotCat(s.category);
+        const isLastHotel = (i === spots.length - 1) && s.category === "hotel";
+        const durLabel = isLastHotel ? "🛌 過夜" : (s.dur || 0) + " 分";
+        const costLabel = s.cost ? `${s.costCcy || baseCcy} ${Number(s.cost).toLocaleString()}` : "";
+        html += `
+          <div class="pv-spot">
+            <div class="pv-time">${escapeHtml(s.start)}<small>${durLabel}</small></div>
+            <div class="pv-spot-body">
+              <div class="pv-spot-name">${cat.emoji} ${escapeHtml(s.name)}<span class="pv-cat-badge">${cat.label}</span></div>
+              ${s.addr ? `<div class="pv-spot-addr">📍 ${escapeHtml(s.addr)}</div>` : ""}
+              ${costLabel ? `<div class="pv-spot-cost">💴 ${costLabel}</div>` : ""}
+              ${s.note ? `<div class="pv-spot-note">${escapeHtml(s.note)}</div>` : ""}
+            </div>
+          </div>
+        `;
+        if (i < spots.length - 1) {
+          const tr = getTransit(s, spots[i + 1]);
+          const legs = tr.legs.map(leg => {
+            const route = (leg.from || leg.to) ? ` ${escapeHtml(leg.from||"?")}→${escapeHtml(leg.to||"?")}` : "";
+            return `${leg.mode} ${leg.mins}分${route}`;
+          }).join(" + ");
+          html += `<div class="pv-transit">${legs}・共 ${tr.totalMins} 分</div>`;
+        }
+      });
+      html += `</div>`;
     });
-    html += `</ul>`;
+    html += `</div>`;
+  }
+
+  // ── 花費總覽 + 結語（接在最後一節，不單獨成頁）──
+  const closingHtml = `<div class="pv-closing">${generatePdfClosing(days.length, state.people, allCosts, totalCost, baseCcy)}</div>`;
+
+  if (state.expenses.length > 0) {
+    html += `
+      <div class="pv-section">
+        <div class="pv-section-head"><span class="pv-section-icon">💰</span><h2>花費總覽</h2></div>
+        <div class="pv-cost-total">${formatMoney(totalCost, baseCcy)} <small>${baseCcy}</small></div>
+        <ul class="pv-expense-list">
+    `;
+    state.expenses.forEach(e => {
+      const payer = getPerson(e.paidBy);
+      html += `
+        <li class="pv-expense-item">
+          <span class="pv-expense-name">${escapeHtml(e.item)}<small>${escapeHtml(payer?.name || "")}</small></span>
+          <span class="pv-expense-amt">${e.ccy} ${Number(e.amt).toLocaleString()}</span>
+        </li>
+      `;
+    });
+    html += `</ul>${closingHtml}</div>`;
+  } else {
+    html += closingHtml;
   }
 
   el.innerHTML = html;
+}
+
+function generatePdfClosing(dayCount, people, allCosts, totalCost, baseCcy) {
+  const allSpots = Object.values(state.days).flat();
+  const text = [state.meta.title || "", ...allSpots.map(s => `${s.name} ${s.addr || ""}`)].join(" ");
+
+  const destMap = [
+    { p: /日本|東京|京都|大阪|沖繩|北海道|奈良|福岡/, emoji: "🌸", msg: "日本的每條巷弄都藏著驚喜，下次一定還要再來！" },
+    { p: /韓國|首爾|釜山|濟州|明洞/, emoji: "⭐", msg: "韓國美食、美景、美人，一趟根本不夠玩！" },
+    { p: /泰國|曼谷|清邁|普吉/, emoji: "🌺", msg: "泰國的微笑和香料，會在心裡留很久很久。" },
+    { p: /歐洲|巴黎|倫敦|羅馬|義大利|法國|德國/, emoji: "🏛️", msg: "歐洲的街道和故事讀不完，期待下次慢慢品味。" },
+    { p: /美國|紐約|洛杉磯|舊金山/, emoji: "🗽", msg: "美國的遼闊和多元，每次都帶來全新的冒險！" },
+    { p: /新加坡|馬來|越南|印尼|峇里/, emoji: "🌴", msg: "東南亞的陽光和熱情，讓人一秒充好電！" },
+  ];
+
+  let destEmoji = "✨", destMsg = "旅行中的每一刻，都是最獨一無二的故事。";
+  for (const d of destMap) {
+    if (d.p.test(text)) { destEmoji = d.emoji; destMsg = d.msg; break; }
+  }
+
+  const names = people.map(p => p.name);
+  const withWho = names.length > 0 ? `和 ${names.join("、")} ` : "";
+  const costStr = totalCost > 0 ? `花了 ${formatMoney(totalCost, baseCcy)} 換來的美好回憶，` : "";
+
+  return `${destEmoji} 旅遊小天使說：${withWho}${dayCount} 天的旅程，${costStr}每一分都值得。${destMsg} 收好這本手冊，帶著滿滿的回憶繼續出發吧！ ${destEmoji}`;
 }
 
 // ============================================================

@@ -1,4 +1,4 @@
-/* ============================================================
+﻿/* ============================================================
    🌸 一起去玩吧！Travel Together — 樣式
    色系靈感：奶油米 + 蜜桃粉 + 薄荷綠 + 淡藕紫
    風格：圓角、俏皮、溫和、留白多
@@ -243,16 +243,20 @@ input { font-family: inherit; }
 }
 /* 行前準備展開 Modal — 先橫向、再縱向 */
 .prep-modal-box {
-  width: min(960px, calc(100vw - 32px));
+  width: min(50vw, calc(100vw - 32px)) !important;
   max-width: none !important;
   max-height: calc(100dvh - 40px);
   overflow-y: auto;
 }
-/* expanded modal grid layout */
+/* expanded modal grid layout: 待辦事項 left, 行李清單 right */
 .prep-modal-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
+}
+/* 3rd+ categories span full width */
+.prep-modal-grid .prep-cat:nth-child(n+3) {
+  grid-column: 1 / -1;
 }
 .prep-modal-grid .prep-cat { margin: 0; }
 
@@ -909,29 +913,44 @@ input { font-family: inherit; }
 .spot-shop-add .btn { padding: 7px 12px !important; }
 .spot-shop-empty { font-size: 12px; color: var(--ink-soft); padding: 4px 0; }
 
-/* 購物清單在景點卡片內顯示 */
-.spot-shop-card {
-  background: #FFF3EC;
-  border-radius: 10px;
-  padding: 8px 12px;
+/* 購物清單：點 chip 才展開的 panel */
+.chip.shop-chip {
+  background: #E8F6EE;
+  color: #2F6B55;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background .15s;
+}
+.chip.shop-chip:hover { background: #C8EDD8; }
+.spot-shop-panel {
+  border-top: 1.5px dashed #E8F6EE;
+  padding: 10px 14px 12px;
+  background: #FAFFF8;
+}
+.spot-shop-panel-head {
+  font-size: 11px;
+  font-weight: 700;
+  color: #2F6B55;
+  letter-spacing: .5px;
+  margin-bottom: 6px;
+}
+.spot-shop-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.spot-shop-card-title {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--ink-soft);
-  letter-spacing: .5px;
-  margin-bottom: 2px;
-}
-.spot-shop-card-item {
+.spot-shop-panel-item label {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 13px;
+  cursor: pointer;
 }
-.spot-shop-card-item.done > span { text-decoration: line-through; color: var(--ink-soft); }
+.spot-shop-panel-item.done label span { text-decoration: line-through; color: var(--ink-soft); }
 
 /* 多張照片在卡片內顯示 */
 .memory-photos {
@@ -1342,6 +1361,23 @@ input { font-family: inherit; }
   font-size: 10px;
   font-weight: 700;
 }
+.auto-unassigned {
+  border-left: 3px solid #FFD6A0 !important;
+}
+.auto-assigned {
+  border-left: 3px solid #B8E0D2 !important;
+}
+.auto-pay-badge {
+  display: inline-block;
+  background: #FFF0DD;
+  color: #C26B4A;
+  border: 1px dashed #F4967F;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
 
 /* ============================================================
    🤖 AI 按鈕群組（這天 / 整趟 / 還原）
@@ -1688,6 +1724,13 @@ input { font-family: inherit; }
 }
 .addr-row input { flex: 1; }
 .addr-row .btn { flex-shrink: 0; white-space: nowrap; }
+.cost-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.cost-row input { flex: 1; }
+.cost-row select { flex-shrink: 0; width: 110px; }
 .addr-hint {
   display: block;
   margin-top: 4px;
@@ -1707,6 +1750,7 @@ input { font-family: inherit; }
   border-radius: 999px;
   font-weight: 700;
 }
+
 
 /* 分類容器 */
 .prep-categories {
@@ -1744,8 +1788,27 @@ input { font-family: inherit; }
 .prep-cat.collapsed .prep-toggle-btn { transform: rotate(-90deg); }
 .prep-cat.collapsed .prep-list,
 .prep-cat.collapsed .prep-add { display: none; }
+.prep-cat.collapsed .prep-subcats-wrap,
+.prep-cat.collapsed .prep-add-subcat { display: none; }
 .prep-cat.collapsed { margin-bottom: 0; }
 .prep-cat.collapsed .prep-cat-head { margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+
+/* 錢包展開按鈕 & Modal */
+.wallet-expand-btn {
+  width: 100%;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.wallet-modal-box {
+  width: min(560px, calc(100vw - 32px)) !important;
+  max-width: none !important;
+}
+.wallet-modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
 
 /* 行前準備展開 Modal */
 .prep-expand-btn {
@@ -1862,102 +1925,364 @@ input { font-family: inherit; }
    ============================================================ */
 .print-only { display: none; }
 
+/* ══════════════════════════════════════════════════════
+   手帳風旅遊手冊 PDF
+   方格紙底 × 奶油色 × 暖棕配色 × Nunito
+══════════════════════════════════════════════════════ */
 @media print {
-  @page { margin: 14mm; }
-  body { background: white !important; color: #000 !important; }
+  @page { margin: 0; size: A4; }
+
+  body {
+    background-color: #FAF7F0 !important;
+    background-image:
+      linear-gradient(rgba(165,135,90,0.10) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(165,135,90,0.10) 1px, transparent 1px) !important;
+    background-size: 20px 20px !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
   .no-print { display: none !important; }
-  .modal { display: none !important; }
+  .modal    { display: none !important; }
   .print-only {
     display: block !important;
-    font-family: "Noto Sans TC", sans-serif;
-    padding: 0;
+    font-family: "Nunito", "Noto Sans TC", sans-serif;
     max-width: 100%;
   }
-  .print-title {
+
+  /* ═══════════════════════════════
+     封面（整頁 A4，奶油方格紙）
+  ═══════════════════════════════ */
+  .pv-cover {
+    height: 100vh;
+    background-color: #FAF7F0;
+    background-image:
+      linear-gradient(rgba(165,135,90,0.13) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(165,135,90,0.13) 1px, transparent 1px);
+    background-size: 20px 20px;
+    display: flex;
+    flex-direction: column;
+    page-break-after: always;
+    overflow: hidden;
+    position: relative;
+  }
+  /* 右上角裝飾星星 */
+  .pv-cover::before {
+    content: "✦   ✦   ✦";
+    position: absolute;
+    top: 18px; right: 24px;
+    font-size: 10px; color: #C8A880; letter-spacing: 5px;
+  }
+  /* 左下角裝飾 */
+  .pv-cover::after {
+    content: "· · ·";
+    position: absolute;
+    bottom: 18px; left: 36px;
+    font-size: 16px; color: #C8A880; letter-spacing: 8px;
+  }
+  /* 左側裝飾邊條（活頁孔效果） */
+  .pv-cover-top {
+    position: absolute;
+    left: 0; top: 0; bottom: 0; width: 28px;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px, transparent 58px,
+      rgba(165,135,90,0.15) 58px, rgba(165,135,90,0.15) 59px
+    );
+    border-right: 1.5px solid rgba(165,135,90,0.20);
+  }
+  /* 中央主文 */
+  .pv-cover-inner {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 28px 72px 16px 60px;
     text-align: center;
-    border-bottom: 2px solid #333;
-    padding-bottom: 12px;
-    margin-bottom: 20px;
+    position: relative;
   }
-  .print-title h1 { font-size: 26px; margin: 0 0 6px; }
-  .print-title p { color: #555; margin: 0; font-size: 13px; }
-  .print-only h2 {
-    font-size: 18px;
-    border-bottom: 1px dashed #999;
-    padding-bottom: 6px;
-    margin: 24px 0 12px;
-    break-after: avoid;
+  .pv-cover-emoji { font-size: 64px; line-height: 1; margin-bottom: 16px; }
+  /* 標題：黃色螢光筆效果 */
+  .pv-cover-title {
+    font-family: "Nunito", sans-serif;
+    font-size: 38px; font-weight: 900;
+    color: #2A1A06;
+    background: linear-gradient(transparent 55%, #FFE566 55%);
+    padding: 0 6px;
+    margin: 0 0 14px;
+    line-height: 1.35;
+    display: inline;
   }
-  .print-only h3.print-prep-cat {
-    font-size: 14px;
-    margin: 14px 0 6px;
-    color: #555;
-    break-after: avoid;
+  .pv-cover-rule {
+    width: 40px; height: 2px;
+    background: #C8A07A;
+    border-radius: 999px;
+    margin: 14px auto 12px;
   }
-  .print-travel {
+  .pv-cover-dates {
+    font-size: 14px; color: #5A3A18;
+    margin: 0 0 5px; font-weight: 700;
+  }
+  .pv-cover-people { font-size: 12px; color: #8A6848; margin: 0; }
+
+  /* ── 去/回程：左右框格（佔 ~25vh）── */
+  .pv-cover-travel {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
+    padding: 10px 20px 14px;
+    min-height: 22vh;
+    flex-shrink: 0;
   }
-  .print-travel-item {
-    border: 1px solid #ccc;
-    border-radius: 6px;
-    padding: 10px;
-    font-size: 13px;
-    line-height: 1.7;
+  .pv-cover-travel-card {
+    border: 2px solid #C8A07A;
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.75);
+    display: flex;
+    flex-direction: column;
+    box-shadow: 3px 3px 0 rgba(165,135,90,0.18);
   }
-  .print-day { margin-bottom: 12px; }
-  .print-spot {
-    display: grid;
-    grid-template-columns: 70px 1fr;
-    gap: 10px;
-    padding: 8px 0;
-    border-bottom: 1px dotted #ccc;
-    break-inside: avoid;
+  .pv-cover-travel-empty {
+    border: 2px dashed #DDD0BE;
+    background: rgba(255,255,255,0.3);
+    box-shadow: none;
   }
-  .print-spot .p-time {
-    font-size: 13px;
-    text-align: center;
-    font-weight: 700;
-    background: #f5f0e8;
-    padding: 6px;
-    border-radius: 4px;
-    height: fit-content;
+  .pv-cover-travel-label {
+    background: #8A5C30;
+    color: #FEFAF3;
+    font-size: 11px; font-weight: 900;
+    padding: 5px 12px;
+    letter-spacing: 1px;
+    flex-shrink: 0;
   }
-  .print-spot .p-time small { font-weight: 400; color: #666; font-size: 11px; }
-  .print-spot .p-body { font-size: 13px; line-height: 1.6; }
-  .print-spot .p-cat {
-    background: #f0eadf;
-    border-radius: 999px;
-    padding: 1px 8px;
-    font-size: 11px;
-    color: #555;
-    margin-left: 4px;
+  .pv-cover-travel-main {
+    font-size: 15px; font-weight: 800;
+    color: #2A1A06;
+    padding: 8px 12px 4px;
+    line-height: 1.35;
   }
-  .print-spot .p-note {
-    background: #fafafa;
-    border-left: 3px solid #ddd;
-    padding: 4px 8px;
-    margin-top: 4px;
-    font-size: 12px;
-    color: #555;
+  .pv-cover-travel-row {
+    font-size: 11.5px; color: #5A3A18;
+    font-weight: 700; line-height: 2;
+    padding: 0 12px;
   }
-  .p-transit {
-    margin-left: 70px;
-    font-size: 11px;
-    color: #777;
-    padding: 4px 0;
+  .pv-cover-travel-note {
+    font-size: 10px; color: #9A7858;
+    padding: 3px 12px 8px;
+    font-style: italic;
   }
-  .print-prep, .print-exp {
+
+  /* ── 底部統計條 ── */
+  .pv-summary {
+    display: flex;
+    background: #5C3A1A;
+    flex-shrink: 0;
+  }
+  .pv-stat {
+    flex: 1; text-align: center;
+    padding: 12px 6px;
+    border-right: 1px solid rgba(255,255,255,0.12);
+  }
+  .pv-stat:last-child { border-right: none; }
+  .pv-stat-n {
+    font-family: "Nunito", sans-serif;
+    font-size: 22px; font-weight: 900;
+    color: #FFE566; line-height: 1;
+  }
+  .pv-stat-cost .pv-stat-n { font-size: 14px; }
+  .pv-stat-l {
+    font-size: 9px; color: rgba(255,255,255,0.6);
+    margin-top: 3px; font-weight: 700;
+  }
+
+  /* ═══════════════════════════════
+     章節通用
+  ═══════════════════════════════ */
+  .pv-section { margin: 22px 36px 0; }
+  .pv-section--itinerary { break-before: page; }
+
+  .pv-section-head {
+    break-after: avoid;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 16px 8px 14px;
+    background: #5C3A1A;
+    border-radius: 7px;
+    margin-bottom: 14px;
+  }
+  .pv-section-head h2 {
+    font-family: "Nunito", sans-serif;
+    font-size: 17px; font-weight: 900;
+    margin: 0; color: #FEFAF3;
+  }
+  .pv-section-icon { font-size: 15px; }
+  .pv-section-sub {
+    font-size: 10px; color: rgba(255,255,255,0.65);
+    margin-left: auto; font-weight: 700;
+  }
+
+  /* ═══════════════════════════════
+     行前準備 — 手帳清單風格
+  ═══════════════════════════════ */
+  .pv-prep-cols {
     columns: 2;
-    column-gap: 20px;
-    font-size: 13px;
-    padding-left: 0;
-    list-style: none;
+    column-gap: 32px;
+    column-fill: auto;
+    orphans: 3; widows: 3;
   }
-  .print-prep li, .print-exp li {
-    padding: 3px 0;
+  .pv-prep-cat {
     break-inside: avoid;
+    margin-bottom: 16px;
+  }
+  /* 分類標題：粗體底線，像手帳分區標記 */
+  .pv-prep-cat-name {
+    font-family: "Nunito", sans-serif;
+    font-weight: 900; font-size: 13px;
+    color: #2A1A06;
+    padding-bottom: 4px;
+    margin-bottom: 9px;
+    border-bottom: 2px solid #8A5C30;
+    display: block;
+  }
+  .pv-prep-sub { margin-bottom: 7px; break-inside: avoid; }
+  /* 子分類：稍小、棕色斜線感 */
+  .pv-prep-sub-name {
+    font-size: 10.5px; font-weight: 800;
+    color: #7A5038;
+    margin-bottom: 2px;
+    padding-left: 10px;
+    position: relative;
+  }
+  .pv-prep-sub-name::before {
+    content: "▸";
+    position: absolute; left: 0;
+    color: #C8A07A;
+    font-size: 10px;
+  }
+  .pv-prep-item {
+    font-size: 11.5px; color: #2A1A06;
+    padding: 1px 0 1px 2px;
+    display: flex; align-items: flex-start; gap: 6px;
+    line-height: 1.9; font-weight: 600;
+  }
+  .pv-check   { color: #2D6A4F; flex-shrink: 0; font-size: 12px; }
+  .pv-uncheck { color: #C8B8A0; flex-shrink: 0; font-size: 12px; }
+
+  /* ═══════════════════════════════
+     每日行程
+  ═══════════════════════════════ */
+  .pv-day { margin-bottom: 18px; break-inside: avoid; }
+
+  .pv-day-color-0 .pv-day-head { background: #8A3A10; }
+  .pv-day-color-1 .pv-day-head { background: #2A5040; }
+  .pv-day-color-2 .pv-day-head { background: #2A4A78; }
+  .pv-day-color-3 .pv-day-head { background: #7A5000; }
+  .pv-day-color-4 .pv-day-head { background: #5C3A7A; }
+
+  .pv-day-head {
+    break-after: avoid;
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 18px;
+    border-radius: 7px 7px 0 0;
+  }
+  .pv-day-n {
+    font-family: "Nunito", sans-serif;
+    font-size: 19px; font-weight: 900; color: white;
+  }
+  .pv-day-date { font-size: 13px; color: rgba(255,255,255,0.88); font-weight: 700; }
+  /* 小裝飾 */
+  .pv-day-head::after { content: "✦"; margin-left: auto; color: rgba(255,255,255,0.25); font-size: 12px; }
+
+  .pv-spot {
+    display: grid; grid-template-columns: 60px 1fr;
+    background: white;
+    border-bottom: 1px solid #EDE5D8;
+    break-inside: avoid;
+  }
+  .pv-spot:last-of-type { border-radius: 0 0 7px 7px; border-bottom: none; }
+
+  .pv-time {
+    padding: 12px 7px; text-align: center;
+    border-right: 1px solid #EDE5D8;
+    font-family: "Nunito", sans-serif;
+    font-size: 13px; font-weight: 800;
+    color: #3A2010; background: #FEFBF5;
+  }
+  .pv-time small {
+    display: block; font-weight: 600;
+    font-size: 9px; color: #B0A090; margin-top: 4px;
+  }
+  .pv-spot-body { padding: 11px 15px; line-height: 1.9; }
+  .pv-spot-name {
+    font-family: "Nunito", sans-serif;
+    font-size: 14px; font-weight: 800; color: #1A1008; margin-bottom: 2px;
+  }
+  .pv-cat-badge {
+    display: inline-block;
+    background: #F5EEE3; color: #7A5030;
+    border-radius: 3px; padding: 0 6px;
+    font-size: 9px; font-weight: 800;
+    margin-left: 7px; vertical-align: middle;
+    border: 1px solid #DDD0BE;
+  }
+  .pv-spot-addr { font-size: 10.5px; color: #9A8878; margin-top: 1px; line-height: 1.75; }
+  .pv-spot-cost { font-size: 11.5px; color: #2D6A4F; font-weight: 800; margin-top: 3px; }
+  .pv-spot-note {
+    font-size: 10.5px; color: #5A4030; background: #FBF6EE;
+    border-left: 3px solid #C8A07A;
+    padding: 4px 9px; margin-top: 7px;
+    border-radius: 0 5px 5px 0; line-height: 1.85;
+  }
+  .pv-transit {
+    grid-column: 1 / -1;
+    font-size: 10px; color: #B0A088;
+    padding: 4px 16px 4px 75px;
+    background: #FEFBF5;
+    border-bottom: 1px dashed #EDE5D8; font-weight: 700;
+  }
+  .pv-transit::before { content: "↓  "; color: #8A6030; font-weight: 900; }
+
+  /* ═══════════════════════════════
+     花費總覽
+  ═══════════════════════════════ */
+  .pv-cost-total {
+    font-family: "Nunito", sans-serif;
+    font-size: 30px; font-weight: 900; color: #8A3A10;
+    margin: 0 0 14px; line-height: 1;
+  }
+  .pv-cost-total small { font-size: 12px; color: #A09080; font-weight: 600; margin-left: 8px; }
+  .pv-expense-list { list-style: none; padding: 0; margin: 0; }
+  .pv-expense-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 0; border-bottom: 1px solid #EDE5D8;
+    font-size: 12px; line-height: 1.85; break-inside: avoid;
+  }
+  .pv-expense-name { color: #2A1A08; font-weight: 600; }
+  .pv-expense-name small { color: #B0A088; font-size: 10px; margin-left: 8px; }
+  .pv-expense-amt { font-family: "Nunito", sans-serif; font-weight: 900; color: #2D6A4F; font-size: 13px; }
+
+  /* ═══════════════════════════════
+     結語（接在最後章節）
+  ═══════════════════════════════ */
+  .pv-closing {
+    break-before: avoid;
+    break-inside: avoid;
+    margin: 20px 0 28px;
+    border: 2px dashed #C8A07A;
+    border-radius: 8px;
+    padding: 14px 20px;
+    font-size: 12px; font-weight: 700;
+    color: #5A3A18; line-height: 2;
+    text-align: center;
+    background: #FFFDF7;
+    position: relative;
+  }
+  .pv-closing::before {
+    content: "✈️  旅遊小天使";
+    display: block;
+    font-size: 11px; font-weight: 900;
+    color: #8A5C30; letter-spacing: 1px;
+    margin-bottom: 6px;
   }
 }
 
@@ -2111,3 +2436,5 @@ input { font-family: inherit; }
   .home-actions { gap: 6px; }
   .home-actions .btn { font-size: 13px; padding: 8px 14px; }
 }
+
+
