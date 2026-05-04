@@ -321,7 +321,10 @@ function renderDayTabs() {
         ${canDelete ? `<span class="tab-del" data-del-day="${d}" title="刪除第 ${d} 天">×</span>` : ""}
       </span>
       ${label ? `<small>${label}</small>` : ""}
-      ${wx ? `<span class="day-weather" title="${wx.min}°～${wx.max}°">${wx.icon} ${wx.max}°</span>` : ""}
+      ${wx
+        ? `<span class="day-weather" data-edit-weather="${d}" title="點擊編輯天氣${wx.max != null ? `（${wx.min}°～${wx.max}°）` : ""}">${wx.icon}${wx.max != null ? ` ${wx.max}°` : ""}</span>`
+        : `<span class="day-weather-add" data-edit-weather="${d}" title="手動設定天氣">🌡️+</span>`
+      }
     `;
     dayTabsEl.appendChild(btn);
   });
@@ -366,6 +369,13 @@ dayTabsEl.addEventListener("click", e => {
   if (delBtn) {
     e.stopPropagation();
     deleteDay(+delBtn.dataset.delDay);
+    return;
+  }
+  // 點到天氣圖示 → 開天氣編輯 Modal
+  const wxEl = e.target.closest("[data-edit-weather]");
+  if (wxEl) {
+    e.stopPropagation();
+    openWeatherEditModal(+wxEl.dataset.editWeather);
     return;
   }
   const tab = e.target.closest(".day-tab");
@@ -2068,6 +2078,65 @@ $("fetchWeatherBtn").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
   }
+});
+
+// ============================================================
+// 🌤️ 天氣手動編輯 Modal
+// ============================================================
+let _wxEditDay = null;
+
+function openWeatherEditModal(dayNum) {
+  _wxEditDay = dayNum;
+  const wx = state.weather && state.weather[dayNum];
+  $("weatherEditTitle").textContent = `🌤️ Day ${dayNum} 天氣設定`;
+  $("wxMaxTemp").value = wx ? wx.max : "";
+  $("wxMinTemp").value = wx ? wx.min : "";
+
+  // 設定 emoji picker 選中狀態
+  const picker = $("wxEmojiPicker");
+  const selectedIcon = wx ? wx.icon : "☀️";
+  picker.querySelectorAll("button").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.wxEmoji === selectedIcon);
+  });
+
+  const modal = $("weatherEditModal");
+  modal.hidden = false;
+}
+
+// Emoji 選擇
+$("wxEmojiPicker").addEventListener("click", e => {
+  const btn = e.target.closest("[data-wx-emoji]");
+  if (!btn) return;
+  $("wxEmojiPicker").querySelectorAll("button").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+});
+
+// 儲存
+$("wxSaveBtn").addEventListener("click", () => {
+  if (_wxEditDay === null) return;
+  const activeBtn = $("wxEmojiPicker").querySelector("button.active");
+  const icon = activeBtn ? activeBtn.dataset.wxEmoji : "🌡️";
+  const max = parseInt($("wxMaxTemp").value, 10);
+  const min = parseInt($("wxMinTemp").value, 10);
+  if (!state.weather) state.weather = {};
+  state.weather[_wxEditDay] = {
+    code: null,
+    max: isNaN(max) ? null : max,
+    min: isNaN(min) ? null : min,
+    icon
+  };
+  persist();
+  renderDayTabs();
+  $("weatherEditModal").hidden = true;
+});
+
+// 清除
+$("wxClearBtn").addEventListener("click", () => {
+  if (_wxEditDay === null) return;
+  if (state.weather) delete state.weather[_wxEditDay];
+  persist();
+  renderDayTabs();
+  $("weatherEditModal").hidden = true;
 });
 
 // ============================================================

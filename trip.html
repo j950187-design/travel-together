@@ -425,6 +425,48 @@
   </div>
 </div>
 
+<!-- ======== 天氣手動設定 Modal ======== -->
+<div class="modal" id="weatherEditModal" hidden>
+  <div class="modal-box">
+    <button class="close" data-close>✕</button>
+    <h3 id="weatherEditTitle">🌤️ Day X 天氣設定</h3>
+    <p class="muted small">手動設定這天的天氣，或按「清除」移除天氣顯示。</p>
+
+    <label>天氣圖示
+      <div class="wx-emoji-picker" id="wxEmojiPicker">
+        <button type="button" data-wx-emoji="☀️" class="active">☀️</button>
+        <button type="button" data-wx-emoji="🌤️">🌤️</button>
+        <button type="button" data-wx-emoji="⛅">⛅</button>
+        <button type="button" data-wx-emoji="☁️">☁️</button>
+        <button type="button" data-wx-emoji="🌫️">🌫️</button>
+        <button type="button" data-wx-emoji="🌦️">🌦️</button>
+        <button type="button" data-wx-emoji="🌧️">🌧️</button>
+        <button type="button" data-wx-emoji="🌨️">🌨️</button>
+        <button type="button" data-wx-emoji="⛈️">⛈️</button>
+        <button type="button" data-wx-emoji="🌀">🌀</button>
+        <button type="button" data-wx-emoji="🌈">🌈</button>
+        <button type="button" data-wx-emoji="🥵">🥵</button>
+        <button type="button" data-wx-emoji="🥶">🥶</button>
+      </div>
+    </label>
+
+    <div class="row">
+      <label>最高溫 (°C)
+        <input type="number" id="wxMaxTemp" placeholder="例：28" />
+      </label>
+      <label>最低溫 (°C)
+        <input type="number" id="wxMinTemp" placeholder="例：22" />
+      </label>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-ghost" id="wxClearBtn" style="margin-right:auto">🗑️ 清除天氣</button>
+      <button class="btn btn-ghost" data-close>取消</button>
+      <button class="btn btn-primary" id="wxSaveBtn">儲存</button>
+    </div>
+  </div>
+</div>
+
 <!-- ======== 列印專用區（平常隱藏，只有列印時出現） ======== -->
 <section id="printView" class="print-only"></section>
 

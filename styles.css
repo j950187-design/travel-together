@@ -188,7 +188,22 @@ input { font-family: inherit; }
   margin-top: 3px;
   color: var(--peach-deep);
   letter-spacing: 0.02em;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 3px;
+  transition: background .15s;
 }
+.day-weather:hover { background: rgba(255,181,167,.25); }
+.day-weather-add {
+  display: block;
+  font-size: 11px;
+  margin-top: 3px;
+  color: var(--text-muted, #aaa);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.day-tab:hover .day-weather-add { opacity: 1; }
 .day-tab:hover { border-color: var(--peach); color: var(--peach-deep); }
 .day-tab.active {
   background: var(--peach);
@@ -198,6 +213,26 @@ input { font-family: inherit; }
 }
 .day-tab.active small  { color: rgba(255,255,255,.85); }
 .day-tab.active .day-weather { color: rgba(255,255,255,.9); }
+.day-tab.active .day-weather:hover { background: rgba(255,255,255,.2); }
+.day-tab.active .day-weather-add { color: rgba(255,255,255,.7); }
+/* Weather edit modal emoji picker */
+.wx-emoji-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.wx-emoji-picker button {
+  font-size: 22px;
+  background: var(--bg, #FFF8F0);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  padding: 4px 6px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.wx-emoji-picker button:hover { border-color: var(--peach); }
+.wx-emoji-picker button.active { border-color: var(--peach-deep); background: var(--peach-light, #FFE8E0); }
 .day-tab.add {
   width: 44px;
   padding: 10px;
