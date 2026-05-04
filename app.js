@@ -314,12 +314,14 @@ function renderDayTabs() {
     const btn = document.createElement("button");
     btn.className = "day-tab" + (d === state.currentDay ? " active" : "");
     btn.dataset.day = d;
+    const wx = state.weather && state.weather[d];
     btn.innerHTML = `
       <span class="day-tab-top">
         <span>Day ${d}</span>
         ${canDelete ? `<span class="tab-del" data-del-day="${d}" title="刪除第 ${d} 天">×</span>` : ""}
       </span>
       ${label ? `<small>${label}</small>` : ""}
+      ${wx ? `<span class="day-weather" title="${wx.min}°～${wx.max}°">${wx.icon} ${wx.max}°</span>` : ""}
     `;
     dayTabsEl.appendChild(btn);
   });
@@ -1952,6 +1954,120 @@ $("undoAiBtn").addEventListener("click", () => {
   $("undoAiBtn").hidden = true;
   persist();
   renderAll();
+});
+
+// ============================================================
+// 🌤️ 天氣查詢（Open-Meteo 免費 API）
+// ============================================================
+function wmoEmoji(code) {
+  if (code === 0)            return "☀️";
+  if (code === 1)            return "🌤️";
+  if (code === 2)            return "⛅";
+  if (code === 3)            return "☁️";
+  if (code <= 48)            return "🌫️";
+  if (code <= 55)            return "🌦️";
+  if (code <= 67)            return "🌧️";
+  if (code <= 77)            return "🌨️";
+  if (code <= 82)            return "🌦️";
+  if (code <= 86)            return "🌨️";
+  if (code <= 99)            return "⛈️";
+  return "🌡️";
+}
+
+function guessDestination() {
+  // 從景點地址找最常出現的地名
+  const addrs = Object.values(state.days).flat().map(s => s.addr).filter(Boolean);
+  if (addrs.length > 0) {
+    const jpM = addrs.join(" ").match(/([^\s,]+(?:都|道|府|県|市))/);
+    if (jpM) return jpM[1];
+    const freq = {};
+    addrs.forEach(a => a.split(/[\s,，、\n]/).forEach(w => { if (w.length >= 2) freq[w] = (freq[w]||0)+1; }));
+    const top = Object.entries(freq).sort((a,b)=>b[1]-a[1])[0];
+    if (top) return top[0];
+  }
+  // 從行程標題猜
+  const title = (state.meta.title || "").replace(/[旅遊行程計畫天日夜\d]/g, "").trim();
+  return title.split(/[\s\/]/)[0] || null;
+}
+
+$("fetchWeatherBtn").addEventListener("click", async () => {
+  const btn = $("fetchWeatherBtn");
+  const startDate = parseTripStartDate();
+  if (!startDate) {
+    alert("請先在行程資訊填入出發日期（格式：YYYY/MM/DD）才能查天氣喔！");
+    return;
+  }
+  // Open-Meteo 只支援今天起 16 天內的預報
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diffDays = Math.floor((startDate - today) / 86400000);
+  if (diffDays > 16) {
+    alert(`⚠️ 出發日期還有 ${diffDays} 天，Open-Meteo 只提供 16 天內的天氣預報，屆時再來查吧！`);
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "⏳ 查詢中…";
+
+  try {
+    const days = Object.keys(state.days).map(Number).sort((a,b)=>a-b);
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + days.length - 1);
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+
+    // 1. 取得目的地
+    let dest = guessDestination();
+    if (!dest) {
+      dest = prompt("✈️ 請輸入目的地城市（例如：東京、首爾、大阪）：");
+      if (!dest) throw new Error("已取消");
+    }
+
+    // 2. Geocoding
+    const geoRes  = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(dest)}&count=1&language=zh`);
+    const geoData = await geoRes.json();
+    if (!geoData.results?.length) throw new Error(`找不到「${dest}」的地理位置，請換個城市名稱試試`);
+    const { latitude, longitude, name: cityName } = geoData.results[0];
+
+    // 3. 天氣預報（Open-Meteo 免費，無需 API key）
+    // 新版 API 用 weather_code，舊版用 weathercode，兩個都帶
+    const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+      `&daily=weather_code,weathercode,temperature_2m_max,temperature_2m_min` +
+      `&timezone=auto&start_date=${fmt(startDate)}&end_date=${fmt(endDate)}` +
+      `&forecast_days=16`;
+    const wxRes  = await fetch(wxUrl);
+    const wxData = await wxRes.json();
+    console.log("[天氣] API 回應：", wxData);
+
+    if (wxData.error) throw new Error(`API 錯誤：${wxData.reason || wxData.error}`);
+    if (!wxData.daily) throw new Error("天氣資料格式異常，請確認行程日期在未來 16 天內");
+
+    // 新版用 weather_code，舊版用 weathercode
+    const wCodes = wxData.daily.weather_code || wxData.daily.weathercode;
+    if (!wCodes) throw new Error("找不到天氣代碼欄位");
+
+    // 4. 存入 state
+    state.weather = {};
+    wxData.daily.time.forEach((_, i) => {
+      const dayNum = i + 1;
+      if (days.includes(dayNum)) {
+        state.weather[dayNum] = {
+          code: wCodes[i],
+          max:  Math.round(wxData.daily.temperature_2m_max[i]),
+          min:  Math.round(wxData.daily.temperature_2m_min[i]),
+          icon: wmoEmoji(wCodes[i])
+        };
+      }
+    });
+
+    persist();
+    renderDayTabs();
+    btn.textContent = "🌤️ 更新天氣";
+    aiTipsEl.innerHTML = `<div class="tip">✅ 已取得 <b>${cityName}</b> ${days.length} 天天氣預報！點各天查看詳情。</div>`;
+  } catch (err) {
+    alert(`😢 天氣查詢失敗：${err.message}`);
+    btn.textContent = "🌤️ 小天使查天氣";
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // ============================================================

@@ -181,6 +181,14 @@ input { font-family: inherit; }
   gap: 4px;
 }
 .day-tab small { font-size: 11px; }
+.day-weather {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 3px;
+  color: var(--peach-deep);
+  letter-spacing: 0.02em;
+}
 .day-tab:hover { border-color: var(--peach); color: var(--peach-deep); }
 .day-tab.active {
   background: var(--peach);
@@ -188,7 +196,8 @@ input { font-family: inherit; }
   border-color: var(--peach);
   box-shadow: 0 4px 12px rgba(255,181,167,.5);
 }
-.day-tab.active small { color: rgba(255,255,255,.85); }
+.day-tab.active small  { color: rgba(255,255,255,.85); }
+.day-tab.active .day-weather { color: rgba(255,255,255,.9); }
 .day-tab.add {
   width: 44px;
   padding: 10px;
