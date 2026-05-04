@@ -1411,6 +1411,200 @@ $("clearTravelBtn").addEventListener("click", () => {
 });
 
 // ============================================================
+// 📷 出發與回程 OCR 圖片辨識
+// ============================================================
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement("script");
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+const AIRPORTS = [
+  ["桃園|TPE|Taiwan Taoyuan|臺北.桃園|台北.桃園", "桃園機場"],
+  ["松山|TSA|Songshan",                           "松山機場"],
+  ["高雄|KHH|Kaohsiung",                          "高雄機場"],
+  ["那霸|OKA|Naha|沖繩|琉球|Okinawa",              "那霸機場"],
+  ["羽田|HND|Haneda",                              "羽田機場"],
+  ["成田|NRT|Narita",                              "成田機場"],
+  ["關西|KIX|Kansai",                              "關西機場"],
+  ["中部|NGO|Chubu|Nagoya|名古屋",                 "中部機場"],
+  ["福岡|FUK|Fukuoka",                             "福岡機場"],
+  ["新千歲|CTS|Sapporo|札幌",                      "新千歲機場"],
+  ["仁川|ICN|Incheon",                             "仁川機場"],
+  ["金浦|GMP|Gimpo",                               "金浦機場"],
+  ["曼谷|BKK|Bangkok|Suvarnabhumi",                "曼谷機場"],
+  ["新加坡|SIN|Singapore|Changi",                  "新加坡機場"],
+  ["香港|HKG|Hong Kong",                           "香港機場"],
+  ["吉隆坡|KUL|Kuala Lumpur",                      "吉隆坡機場"],
+  ["馬尼拉|MNL|Manila",                            "馬尼拉機場"],
+  ["峇里|DPS|Bali|Denpasar",                       "峇里機場"],
+];
+
+// 從一段文字解析出單一航段資料
+function parseOneLeg(text) {
+  const r = {};
+
+  // 交通方式
+  if (/flight|航班|boarding|机票|機票|飛機|airplane/i.test(text))  r.type = "✈️ 飛機";
+  else if (/新幹線|shinkansen|高鐵|thsr/i.test(text))             r.type = "🚄 高鐵 / 火車";
+  else if (/ferry|郵輪|渡輪|cruise/i.test(text))                  r.type = "🚢 郵輪 / 渡輪";
+  else if (/bus|巴士|客運/i.test(text))                           r.type = "🚌 長途巴士";
+
+  // 航班號：OCR 常把 I→L→l→1、O→0 混淆，統一修正字母和數字部分
+  const normalized = text.replace(/\b([A-Za-z]{1,2})\s*([\dOoIiLl]{3,4})\b/g, (_, letters, nums) => {
+    const fixedLetters = letters.toUpperCase().replace(/L/g, "I");   // 字母：L→I
+    const fixedNums   = nums.toUpperCase().replace(/O/g,"0").replace(/[IiLl]/g,"1"); // 數字：O→0, I/L/l→1
+    return fixedLetters + fixedNums;
+  });
+  const flightM = normalized.match(/\b([A-Z]{2})(\d{3,4})\b/) || text.match(/\b([A-Z]{1,2})\s*(\d{2,4})\b/);
+  if (flightM) r.number = flightM[1] + " " + flightM[2];
+
+  // 時間（第一個出發，第二個抵達）
+  const times = [...text.matchAll(/\b(\d{1,2}:\d{2})\b/g)].map(m => m[1]);
+  if (times[0]) r.departAt = times[0];
+  if (times[1]) r.arriveAt = times[1];
+
+  // 日期
+  const dateM = text.match(/(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})/i);
+  if (dateM) {
+    if (r.departAt) r.departAt = dateM[1] + " " + r.departAt;
+    if (r.arriveAt) r.arriveAt = dateM[1] + " " + r.arriveAt;
+  }
+
+  // 機場：依出現位置排序，第一個＝出發地，第二個＝抵達地
+  const byPos = [];
+  for (const [rx, name] of AIRPORTS) {
+    const m = new RegExp(rx, "i").exec(text);
+    if (m) byPos.push({ name, index: m.index });
+  }
+  byPos.sort((a, b) => a.index - b.index);
+  if (byPos[0]) r.departFrom = byPos[0].name;
+  if (byPos[1]) r.arriveTo   = byPos[1].name;
+
+  if (r.number) r.note = `班號：${r.number}`;
+  return r;
+}
+
+// 把整段 OCR 文字拆成 [去程文字, 回程文字]
+function splitOcrSegments(text) {
+  // 方法1：有明確的去程/回程標籤
+  const retIdx = text.search(/回程|return flight|inbound|returning/i);
+  if (retIdx > 0) {
+    return [text.slice(0, retIdx).trim(), text.slice(retIdx).trim()];
+  }
+
+  // 方法2：找兩個獨立日期（跳過 "日期1 - 日期2" 這種範圍格式）
+  // 先標記日期範圍的位置，避免誤判
+  const rangeRe = /\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}\s*[-–—~～to至]\s*\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}/g;
+  const rangeSpans = [...text.matchAll(rangeRe)].map(m => [m.index, m.index + m[0].length]);
+  const inRange = idx => rangeSpans.some(([s, e]) => idx >= s && idx < e);
+
+  const dateRe = /\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}/g;
+  const standaloneDates = {};
+  for (const m of text.matchAll(dateRe)) {
+    if (!inRange(m.index) && !standaloneDates[m[0]]) {
+      standaloneDates[m[0]] = m.index;
+    }
+  }
+  const sortedDates = Object.entries(standaloneDates).sort((a, b) => a[1] - b[1]);
+  if (sortedDates.length >= 2) {
+    const cut = sortedDates[1][1];
+    return [text.slice(0, cut).trim(), text.slice(cut).trim()];
+  }
+
+  // 方法3：找到兩個航班號（容許 OCR 大小寫混淆），在第二個之前切
+  const flightRe = /\b[A-Za-z]{1,2}\s*[\dOoIil]{3,4}\b/g;
+  const flights = [...text.matchAll(flightRe)];
+  if (flights.length >= 2) {
+    const cut = flights[1].index;
+    return [text.slice(0, cut).trim(), text.slice(cut).trim()];
+  }
+
+  // 方法4：4 個以上時間，中間切
+  const timePoses = [...text.matchAll(/\b\d{1,2}:\d{2}\b/g)];
+  if (timePoses.length >= 4) {
+    const cut = timePoses[Math.floor(timePoses.length / 2)].index;
+    return [text.slice(0, cut).trim(), text.slice(cut).trim()];
+  }
+
+  return [text, ""];
+}
+
+function applyLegToState(leg, data) {
+  if (!state.travel) state.travel = {};
+  state.travel[leg] = {
+    type:       data.type       || state.travel[leg]?.type || "✈️ 飛機",
+    number:     data.number     || "",
+    departAt:   data.departAt   || "",
+    departFrom: data.departFrom || "",
+    arriveAt:   data.arriveAt   || "",
+    arriveTo:   data.arriveTo   || "",
+    note:       data.note       || "",
+  };
+}
+
+$("travelOcrCardInput").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const label  = $("travelOcrCardLabel");
+  const hint   = $("travelOcrCardHint");
+  const btnTxt = $("travelOcrCardBtnText");
+
+  label.classList.add("loading");
+  btnTxt.textContent = "⏳ 辨識中…";
+  hint.hidden = true;
+
+  try {
+    if (!window.Tesseract) {
+      await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js");
+    }
+    const { data: { text } } = await Tesseract.recognize(file, "eng+chi_tra+jpn", {
+      logger: m => {
+        if (m.status === "recognizing text")
+          btnTxt.textContent = `⏳ 辨識中 ${Math.round(m.progress * 100)}%`;
+      }
+    });
+
+    const [outText, retText] = splitOcrSegments(text);
+    const outData = parseOneLeg(outText);
+    const retData = retText ? parseOneLeg(retText) : null;
+
+    const hasBoth = retData && (retData.number || retData.departAt || retData.departFrom);
+    const msgs = [];
+
+    if (outData.number || outData.departAt || outData.departFrom) {
+      applyLegToState("outbound", outData);
+      msgs.push(`去程：${[outData.number, outData.departAt, outData.departFrom].filter(Boolean).join(" / ")}`);
+    }
+    if (hasBoth) {
+      applyLegToState("return", retData);
+      msgs.push(`回程：${[retData.number, retData.departAt, retData.departFrom].filter(Boolean).join(" / ")}`);
+    }
+
+    if (msgs.length > 0) {
+      persist();
+      renderTravel();
+      hint.textContent = "✅ 已帶入 " + msgs.join("　") + "　請確認各欄位是否正確";
+    } else {
+      hint.textContent = "⚠️ 未能辨識出行程資訊，請手動填寫（建議用清晰的截圖）";
+    }
+    hint.hidden = false;
+    btnTxt.textContent = "📷 重新上傳";
+  } catch (err) {
+    hint.textContent = `😢 辨識失敗：${err.message}`;
+    hint.hidden = false;
+    btnTxt.textContent = "📷 上傳截圖自動帶入去回程";
+  } finally {
+    label.classList.remove("loading");
+    e.target.value = "";
+  }
+});
+
+// ============================================================
 // 行前準備清單（分類版）
 // ============================================================
 const prepCatsEl = $("prepCategories");

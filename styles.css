@@ -853,6 +853,26 @@ input { font-family: inherit; }
 
 /* 景點 Modal 裡的照片上傳 */
 .modal-wide { max-width: 500px; }
+/* 出發與回程 OCR 上傳 */
+.travel-ocr-upload-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 2px dashed var(--peach);
+  border-radius: 12px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--peach-deep);
+  background: var(--peach-bg, #FFF5F0);
+  margin-bottom: 14px;
+  transition: background .15s, border-color .15s;
+}
+.travel-ocr-upload-label:hover { background: #FFE8E0; border-color: var(--peach-deep); }
+.travel-ocr-upload-label.loading { opacity: .7; pointer-events: none; }
+.travel-ocr-hint { margin-top: -8px; margin-bottom: 10px; }
 
 /* 多張照片 Gallery */
 .photo-gallery {
