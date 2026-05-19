@@ -1212,15 +1212,24 @@ input { font-family: inherit; }
   box-shadow: 0 4px 0 0 var(--peach), var(--shadow);
 }
 .drag-handle {
-  font-size: 14px;
+  font-size: 18px;
   color: var(--ink-soft);
-  padding: 2px 4px;
+  padding: 6px 10px;
   cursor: grab;
   user-select: none;
+  touch-action: none;
   opacity: .5;
   transition: opacity .15s;
+  min-width: 36px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .spot-card:hover .drag-handle { opacity: 1; color: var(--peach-deep); }
+@media (pointer: coarse) {
+  .drag-handle { font-size: 22px; padding: 8px 14px; opacity: 0.7; }
+}
 /* 讓互動元素覆寫 cursor */
 .spot-card button, .spot-card a, .spot-card input, .spot-card select,
 .spot-card .spot-body, .spot-card .spot-time {
@@ -1357,8 +1366,17 @@ input { font-family: inherit; }
   border-color: #F6E0B4;
   background: #FFFCF4;
 }
-.leg-row .leg-mins-label,
-.leg-row .leg-cost-label { font-size: 12px; color: var(--ink-soft); }
+.leg-row .leg-mins-label { font-size: 12px; color: var(--ink-soft); }
+.leg-row select.leg-ccy {
+  width: 72px;
+  padding: 6px 4px;
+  border-radius: 8px;
+  border: 1.5px solid #F6E0B4;
+  background: #FFFCF4;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--ink);
+}
 .leg-row .leg-del-btn { margin-left: auto; }
 .leg-row input.leg-from,
 .leg-row input.leg-to {
@@ -2391,15 +2409,17 @@ input { font-family: inherit; }
 /* ---------- 平板 (≤ 1024px) ---------- */
 @media (max-width: 1024px) {
   .layout {
-    grid-template-columns: 1fr;
-    grid-template-areas: none;
-    grid-template-rows: none;
+    display: flex;
+    flex-direction: column;
+    grid-template-columns: unset;
+    grid-template-areas: unset;
+    grid-template-rows: unset;
     padding: 20px 24px 50px;
   }
-  /* 手機/平板順序：出發回程 → 側邊欄 → 行程 */
+  /* 手機/平板順序：出發回程 → 行程 → 側邊欄 */
   .travel-card { order: 1; }
-  .sidebar     { order: 2; }
-  .plan        { order: 3; }
+  .plan        { order: 2; }
+  .sidebar     { order: 3; }
   .topbar { padding: 16px 24px; }
   .travel-grid { grid-template-columns: 1fr 1fr; }
   .hero-text h1 { font-size: 28px; }

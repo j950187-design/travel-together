@@ -37,9 +37,9 @@ function renderTrips() {
     const dayCount = Object.keys(t.days || {}).length;
     const spotCount = Object.values(t.days || {}).reduce((n, d) => n + d.length, 0);
     const photoCount = Object.values(t.days || {}).reduce(
-      (n, d) => n + d.filter(s => s.photo).length, 0
+      (n, d) => n + d.reduce((sum, s) => sum + (Array.isArray(s.photos) ? s.photos.length : (s.photo ? 1 : 0)), 0), 0
     );
-    const total = (t.expenses || []).reduce((n, e) => n + e.amt, 0);
+    const total = (t.expenses || []).reduce((n, e) => n + (Number(e.amt ?? e.amount) || 0), 0);
 
     const card = document.createElement("div");
     card.className = "trip-card";
@@ -102,7 +102,7 @@ createTripBtn.addEventListener("click", () => {
   const title = document.getElementById("tripTitle").value.trim() || "我的新旅行";
   const dates = document.getElementById("tripDates").value.trim();
   const id = newTripId();
-  saveTrip(id, {
+  saveTrip(id, normalizeTripData({
     meta: {
       title,
       dates,
@@ -112,7 +112,7 @@ createTripBtn.addEventListener("click", () => {
     currentDay: 1,
     days: { 1: [] },
     expenses: [],
-  });
+  }));
   // 建完直接跳進去規劃
   window.location.href = `trip.html?id=${id}`;
 });
@@ -208,17 +208,33 @@ function importJsonBackup(text) {
   }
   let added = 0, replaced = 0;
   for (const [id, trip] of Object.entries(incoming)) {
-    if (existing[id] && mode === "overwrite") { existing[id] = trip; replaced++; }
+    const normalizedTrip = normalizeTripData(JSON.parse(JSON.stringify(trip)));
+    if (existing[id] && mode === "overwrite") { existing[id] = normalizedTrip; replaced++; }
     else if (existing[id]) {
       const newId = newTripId();
-      const cp = JSON.parse(JSON.stringify(trip));
+      const cp = normalizedTrip;
       if (cp.meta) cp.meta.title = (cp.meta.title || "未命名") + "（匯入）";
       existing[newId] = cp; added++;
-    } else { existing[id] = trip; added++; }
+    } else { existing[id] = normalizedTrip; added++; }
   }
   saveAllTrips(existing);
   alert(`📥 匯入完成！新增 ${added} 趟${replaced ? `、覆蓋 ${replaced} 趟舊資料` : ""}。`);
   renderTrips();
+}
+
+function extractCurrencyAmounts(text) {
+  const re = /(?:(NT\$|NTD|TWD|\$|¥|JPY)\s*([\d,]+(?:\.\d+)?)|([\d,]+(?:\.\d+)?)\s*(元|日圓|円|日幣|台幣|新台幣))/gi;
+  const found = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const marker = (m[1] || m[4] || "").toUpperCase();
+    const raw = m[2] || m[3];
+    const amt = normalizeAmount(raw);
+    if (amt <= 0) continue;
+    const ccy = /JPY|¥|日|円/.test(marker) ? "JPY" : "TWD";
+    found.push({ amt, ccy });
+  }
+  return found;
 }
 
 // ── Line 聊天記錄解析 ──────────────────────────────────────
@@ -235,7 +251,7 @@ function importLineChat(text) {
   // Line 日期行格式：2024/01/15(週一)  或  2024年1月15日(週一)
   const dateLine = /^(\d{4})[\/年](\d{1,2})[\/月](\d{1,2})[日(（]/;
   // Line 訊息格式：12:00\t發話人\t內容  (有些版本是 下午12:00)
-  const msgLine  = /^(?:上午|下午)?(\d{1,2}:\d{2})[\t\s]+(.+?)[\t	](.+)$/;
+  const msgLine  = /^(上午|下午|AM|PM)?\s*(\d{1,2}:\d{2})[\t\s]+(.+?)[\t	](.+)$/i;
 
   const days = [];      // [{ dateStr, msgs: [{time,sender,text}] }]
   let cur = null;
@@ -249,7 +265,11 @@ function importLineChat(text) {
     }
     const mm = line.match(msgLine);
     if (mm && cur) {
-      cur.msgs.push({ time: mm[1], sender: mm[2].trim(), text: mm[3].trim() });
+      cur.msgs.push({
+        time: normalizeTimeValue(`${mm[1] || ""}${mm[2]}`, mm[2]),
+        sender: mm[3].trim(),
+        text: mm[4].trim()
+      });
     }
   }
 
@@ -259,6 +279,9 @@ function importLineChat(text) {
   const systemSenders = new Set(["系統訊息","System Message","LINE"]);
   const senders = new Set();
   days.forEach(d => d.msgs.forEach(m => { if (!systemSenders.has(m.sender)) senders.add(m.sender); }));
+  const peopleList = makePeopleFromNames([...senders]);
+  const peopleIds = peopleList.length ? peopleList.map(p => p.id) : getDefaultPeople().map(p => p.id);
+  const personIdByName = new Map((peopleList.length ? peopleList : getDefaultPeople()).map(p => [p.name, p.id]));
   const people = [...senders].join("、");
 
   // 4. 日期範圍
@@ -274,8 +297,6 @@ function importLineChat(text) {
     景點: ["景點","參觀","逛","公園","博物館","寺","神社","城","市場","購物","mall"],
     交通: ["飛機","班機","新幹線","電車","捷運","JR","出發","抵達","機場"],
   };
-  const expenseRe = /(?:NT\$|NTD|\$|¥|JPY|約?)\s*([\d,]+)/gi;
-
   const tripDays = {};
   const tripExpenses = [];
 
@@ -304,22 +325,16 @@ function importLineChat(text) {
       }
 
       // 費用偵測
-      let em;
-      const textCopy = msg.text;
-      while ((em = expenseRe.exec(textCopy)) !== null) {
-        const amt = parseFloat(em[1].replace(/,/g, ""));
-        if (amt > 0) {
-          tripExpenses.push({
-            id: `exp-line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            name: msg.text.substring(0, 40),
-            amount: amt,
-            ccy: /[¥JPY]/.test(em[0]) ? "JPY" : "TWD",
-            who: [msg.sender],
-            paidBy: msg.sender,
-            date: day.dateStr
-          });
-        }
-      }
+      extractCurrencyAmounts(msg.text).forEach(({ amt, ccy }) => {
+        tripExpenses.push({
+          id: `exp-line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          item: msg.text.substring(0, 40),
+          amt,
+          ccy,
+          paidBy: personIdByName.get(msg.sender) || peopleIds[0] || "p1",
+          splitWith: peopleIds,
+        });
+      });
     });
 
     // 自動偵測到的地點 → 各別景點卡
@@ -327,13 +342,13 @@ function importLineChat(text) {
       spots.push({
         id: `spot-line-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         name,
-        cat: info.cat,
+        category: normalizeSpotCategory(info.cat),
         addr: "",
         note: `來自 Line：${info.text}`,
         cost: "",
         costCcy: "TWD",
-        time: info.time,
-        duration: 60,
+        start: normalizeTimeValue(info.time, "09:00"),
+        dur: 60,
         photos: [],
         shopItems: []
       });
@@ -348,13 +363,13 @@ function importLineChat(text) {
       spots.push({
         id: `spot-note-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         name: `💬 Day ${dayNum} 聊天記錄`,
-        cat: "note",
+        category: "other",
         addr: "",
         note: chatNote,
         cost: "",
         costCcy: "TWD",
-        time: "",
-        duration: 0,
+        start: "09:00",
+        dur: 0,
         photos: [],
         shopItems: []
       });
@@ -374,17 +389,18 @@ function importLineChat(text) {
       createdAt: Date.now()
     },
     days: tripDays,
-    travel: { outbound: null, inbound: null, legs: [] },
+    people: peopleList.length ? peopleList : getDefaultPeople(),
+    travel: { outbound: null, return: null },
     expenses: tripExpenses,
     prep: [],
     baseCurrency: "TWD"
   };
 
   const existing = loadAllTrips();
-  existing[tripId] = trip;
+  existing[tripId] = normalizeTripData(trip);
   saveAllTrips(existing);
 
-  const locCount = Object.values(tripDays).flatMap(s => s).filter(s => s.cat !== "note").length;
+  const locCount = Object.values(tripDays).flat().filter(s => !s.name.startsWith("💬 Day")).length;
   const expCount = tripExpenses.length;
   alert(
     `✅ Line 聊天記錄匯入完成！\n\n` +
@@ -413,10 +429,11 @@ function makeExpId()  { return `exp-${Date.now()}-${Math.random().toString(36).s
 
 function guessCat(name) {
   const n = (name || "").toLowerCase();
-  if (/餐|食|吃|飯|cafe|coffee|咖啡|breakfast|lunch|dinner|ramen|拉麵|燒肉|壽司|居酒屋/.test(n)) return "餐廳";
-  if (/hotel|飯店|旅館|民宿|住宿|inn|lodge|hostel/.test(n)) return "住宿";
-  if (/airport|機場|飛機|flight|航班|bus|train|jr|新幹線|電車|捷運|交通|車站/.test(n)) return "交通";
-  return "景點";
+  if (/餐|食|吃|飯|cafe|coffee|咖啡|breakfast|lunch|dinner|ramen|拉麵|燒肉|壽司|居酒屋/.test(n)) return "food";
+  if (/hotel|飯店|旅館|民宿|住宿|inn|lodge|hostel/.test(n)) return "hotel";
+  if (/購物|商場|百貨|市場|mall|shop|shopping|買/.test(n)) return "shopping";
+  if (/airport|機場|飛機|flight|航班|bus|train|jr|新幹線|電車|捷運|交通|車站/.test(n)) return "other";
+  return "sight";
 }
 
 function parseAnyDate(cell) {
@@ -435,7 +452,7 @@ function parseAnyDate(cell) {
 function saveTripAndAlert(trip, summary) {
   const id = newTripId();
   const all = loadAllTrips();
-  all[id] = trip;
+  all[id] = normalizeTripData(trip);
   saveAllTrips(all);
   alert(summary);
   renderTrips();
@@ -496,10 +513,10 @@ async function importExcel(file) {
 
     if (!dayMap.has(curDate)) dayMap.set(curDate, []);
     dayMap.get(curDate).push({
-      id: makeSpotId(), name, cat: guessCat(name),
+      id: makeSpotId(), name, category: guessCat(name),
       addr: "", note: noteStr,
       cost: cost || "", costCcy: "TWD",
-      time: timeStr, duration: 60,
+      start: normalizeTimeValue(timeStr, "09:00"), dur: 60,
       photos: [], shopItems: []
     });
   });
@@ -516,7 +533,7 @@ async function importExcel(file) {
   saveTripAndAlert({
     meta: { title, dates: dateRange, people: "", cover: "📊", createdAt: Date.now() },
     days: tripDays,
-    travel: { outbound: null, inbound: null, legs: [] },
+    travel: { outbound: null, return: null },
     expenses: [], prep: [], baseCurrency: "TWD"
   }, `✅ Excel 匯入完成！\n\n📅 ${dates.length} 天  📍 ${spotCount} 個項目`);
 }
@@ -555,7 +572,6 @@ async function importPdf(file) {
   const lines   = fullText.split(/\n+/).map(l => l.trim()).filter(Boolean);
   const dateRe  = /(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/;
   const timeRe  = /^(\d{1,2}:\d{2})/;
-  const costRe  = /(?:NT\$|NTD|\$|¥|JPY)\s*([\d,]+)/g;
 
   const dayMap  = new Map();
   const expenses = [];
@@ -570,15 +586,12 @@ async function importPdf(file) {
     }
 
     // 費用偵測（不管有沒有日期都收）
-    let em;
-    while ((em = costRe.exec(line)) !== null) {
-      const amt = parseFloat(em[1].replace(/,/g,""));
-      if (amt > 0) expenses.push({
-        id: makeExpId(), name: line.substring(0, 40),
-        amount: amt, ccy: /[¥JPY]/.test(em[0]) ? "JPY" : "TWD",
-        who: [], paidBy: ""
+    extractCurrencyAmounts(line).forEach(({ amt, ccy }) => {
+      expenses.push({
+        id: makeExpId(), item: line.substring(0, 40),
+        amt, ccy, paidBy: "p1", splitWith: ["p1", "p2", "p3"]
       });
-    }
+    });
 
     if (!curDate) return;
     const tm   = line.match(timeRe);
@@ -587,9 +600,9 @@ async function importPdf(file) {
 
     dayMap.get(curDate).push({
       id: makeSpotId(), name: name.substring(0, 50),
-      cat: guessCat(name), addr: "", note: "",
+      category: guessCat(name), addr: "", note: "",
       cost: "", costCcy: "TWD",
-      time: tm ? tm[1] : "", duration: 60,
+      start: tm ? normalizeTimeValue(tm[1], "09:00") : "09:00", dur: 60,
       photos: [], shopItems: []
     });
   });
@@ -598,9 +611,9 @@ async function importPdf(file) {
   if (dayMap.size === 0) {
     dayMap.set("day1", [{
       id: makeSpotId(), name: "📄 PDF 內容備注",
-      cat: "note", addr: "",
+      category: "other", addr: "",
       note: fullText.substring(0, 3000),
-      cost: "", costCcy: "TWD", time: "", duration: 0,
+      cost: "", costCcy: "TWD", start: "09:00", dur: 0,
       photos: [], shopItems: []
     }]);
   }
@@ -618,7 +631,7 @@ async function importPdf(file) {
   saveTripAndAlert({
     meta: { title, dates: dateRange, people: "", cover: "📄", createdAt: Date.now() },
     days: tripDays,
-    travel: { outbound: null, inbound: null, legs: [] },
+    travel: { outbound: null, return: null },
     expenses, prep: [], baseCurrency: "TWD"
   }, `✅ PDF 匯入完成！\n\n📅 ${validDates.length} 天  📍 ${spotCount} 個項目  💰 ${expenses.length} 筆費用`);
 }

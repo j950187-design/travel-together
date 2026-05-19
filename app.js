@@ -25,13 +25,14 @@ if (!TRIP_ID || !loadTrip(TRIP_ID)) {
   throw new Error("Trip not found");
 }
 
-let state = loadTrip(TRIP_ID);
+let state = normalizeTripData(loadTrip(TRIP_ID));
 // ---- 確保結構完整（舊資料相容） ----
 state.currentDay = state.currentDay || 1;
 state.days = state.days || { 1: [] };
 state.expenses = state.expenses || [];
 state.travel = state.travel || { outbound: null, return: null };
 state.spotPayments = state.spotPayments || {}; // 自動條目的付款指定 { key: { paidBy, splitWith } }
+state.geoCache = state.geoCache || {}; // 地址查詢快取，避免重複打地圖服務
 
 // 同行夥伴 / 幣別 / 匯率（舊資料補上預設）
 state.people = state.people || [
@@ -117,11 +118,13 @@ Object.values(state.days).forEach(d => d.forEach(s => {
 }));
 
 function persist() { saveTrip(TRIP_ID, state); }
+persist();
 
 let nextSpotId = 1, nextPrepId = 1, nextShopItemId = 1;
 Object.values(state.days).forEach(d =>
   d.forEach(s => {
-    if (s.id >= nextSpotId) nextSpotId = s.id + 1;
+    const spotIdNum = Number(s.id);
+    if (Number.isFinite(spotIdNum) && spotIdNum >= nextSpotId) nextSpotId = spotIdNum + 1;
     (s.shopItems || []).forEach(it => { if (it.id >= nextShopItemId) nextShopItemId = it.id + 1; });
   })
 );
@@ -238,7 +241,7 @@ function getPerson(id) {
 }
 
 // ========== 交通時間估算（多段轉乘） ==========
-const TRANSIT_MODES = ["🚶 步行", "🚇 電車", "🚌 公車", "🚕 計程車", "🚴 自行車", "🚗 自駕"];
+const TRANSIT_MODES = ["🚶 步行", "🚇 電車", "🚌 公車", "🚕 計程車", "🚴 自行車", "🚗 自駕", "✈️ 飛機"];
 
 function defaultTransit(from, to) {
   // 沒填過交通時，用簡單估算（之後可以接 Google Directions API）
@@ -409,7 +412,8 @@ function addNewDay() {
       start: "08:00",
       dur: 30,        // 預設 30 分鐘整理 / 退房
       cost: 0,
-      photo: "",
+      photos: [],
+      shopItems: [],
       note: "🌅 從這裡出發",
       travelLegs: null,
     });
@@ -474,7 +478,7 @@ function buildSpotCard(spot, idx, total) {
         <div class="chips">
           <a class="chip map" href="${mapUrl}" target="_blank" rel="noopener"
              onclick="event.stopPropagation()">🗺️ 開地圖</a>
-          ${spot.cost > 0 ? `<span class="chip cost">💴 ${spot.cost} TWD</span>` : ""}
+          ${spot.cost > 0 ? `<span class="chip cost">💴 ${spot.cost} ${spot.costCcy || state.baseCurrency}</span>` : ""}
           ${photos.length > 0 ? `<span class="chip photo-chip">📷 ${photos.length}</span>` : ""}
           ${shopItems.length > 0 ? `<button class="chip shop-chip" data-shop-toggle title="展開購物 / 行動清單">🛍️ <span class="shop-count">${shopItems.filter(i=>i.done).length}/${shopItems.length}</span></button>` : ""}
         </div>
@@ -556,7 +560,9 @@ function buildSpotCard(spot, idx, total) {
 
 function buildTransit(from, to, fromIdx) {
   const { legs, totalMins, isCustom } = getTransit(from, to);
-  const totalCost = legs.reduce((n, l) => n + (+l.cost || 0), 0);
+  const baseCcy = state.baseCurrency;
+  const totalCostBase = legs.reduce((n, l) =>
+    n + convertAmount(+l.cost || 0, l.ccy || baseCcy, baseCcy), 0);
   const div = document.createElement("div");
   div.className = "transit" + (legs.length > 1 ? " multi" : "");
   div.dataset.fromIdx = fromIdx;
@@ -565,8 +571,9 @@ function buildTransit(from, to, fromIdx) {
     const route = (leg.from || leg.to)
       ? `<small class="leg-route">${escapeHtml(leg.from || "?")} → ${escapeHtml(leg.to || "?")}</small>`
       : "";
+    const legCcy = leg.ccy || baseCcy;
     const costChip = (+leg.cost > 0)
-      ? `<span class="leg-cost-chip">💴 ${leg.cost}</span>` : "";
+      ? `<span class="leg-cost-chip">💴 ${leg.cost} ${legCcy}</span>` : "";
     return `
       <div class="leg-row-display">
         ${legs.length > 1 ? `<span class="leg-num-dot">${i + 1}</span>` : ""}
@@ -581,7 +588,7 @@ function buildTransit(from, to, fromIdx) {
     <div class="legs">${legsHTML}</div>
     <div class="transit-foot">
       <small class="suggest">${isCustom ? "" : "AI 估算 · "}共 ${totalMins} 分${
-        totalCost > 0 ? ` · 💴 ${totalCost} TWD` : ""
+        totalCostBase > 0 ? ` · 💴 ${Math.round(totalCostBase).toLocaleString()} ${baseCcy}` : ""
       }${totalMins ? ` · ${suggestTransport(totalMins)}` : ""}</small>
       <button class="icon-btn tiny transit-edit" title="編輯交通方式">✎</button>
     </div>
@@ -718,7 +725,7 @@ function inlineEditTime(card, spot) {
   const oldHTML = wrapper.innerHTML;
   wrapper.innerHTML = `
     <input type="time" class="inline-time" value="${spot.start}" />
-    <input type="number" class="inline-dur" value="${spot.dur}" min="15" step="15" title="停留分鐘" />
+    <input type="number" class="inline-dur" value="${spot.dur}" min="0" step="15" title="停留分鐘" />
   `;
   const timeInput = wrapper.querySelector(".inline-time");
   const durInput = wrapper.querySelector(".inline-dur");
@@ -729,7 +736,8 @@ function inlineEditTime(card, spot) {
     if (saved) return; saved = true;
     const idx = state.days[state.currentDay].findIndex(s => s.id === spot.id);
     spot.start = timeInput.value || spot.start;
-    spot.dur = +durInput.value || spot.dur;
+    const nextDur = Number(durInput.value);
+    if (Number.isFinite(nextDur) && nextDur >= 0) spot.dur = nextDur;
     cascadeTimes(idx + 1);
     persist();
     renderAll();
@@ -753,10 +761,11 @@ function inlineEditTime(card, spot) {
 }
 
 // ============================================================
-// 拖拉排序
+// 拖拉排序（桌機 drag API + 觸控 touch API）
 // ============================================================
 let dragId = null;
 function attachDragHandlers(card, id) {
+  // ---- 桌機 HTML5 drag ----
   card.addEventListener("dragstart", e => {
     dragId = id;
     card.classList.add("dragging");
@@ -787,6 +796,73 @@ function attachDragHandlers(card, id) {
     card.classList.remove("drop-above", "drop-below");
     if (dragId != null && dragId !== id) {
       moveSpot(dragId, id, before);
+    }
+    dragId = null;
+  });
+
+  // ---- 觸控裝置（平板 / 手機）touch drag ----
+  const handle = card.querySelector(".drag-handle");
+  if (!handle) return;
+
+  let touchDragging = false;
+  let touchClone = null;
+  let touchOffsetY = 0;
+
+  handle.addEventListener("touchstart", e => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    dragId = id;
+    touchDragging = true;
+
+    // 建立視覺拖曳替身
+    touchClone = card.cloneNode(true);
+    touchClone.style.cssText = `
+      position:fixed; z-index:9999; opacity:0.85; pointer-events:none;
+      width:${card.offsetWidth}px; left:${card.getBoundingClientRect().left}px;
+      top:${card.getBoundingClientRect().top}px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.25); border-radius:12px;
+    `;
+    document.body.appendChild(touchClone);
+    touchOffsetY = touch.clientY - card.getBoundingClientRect().top;
+    card.classList.add("dragging");
+  }, { passive: false });
+
+  handle.addEventListener("touchmove", e => {
+    if (!touchDragging) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (touchClone) {
+      touchClone.style.top = (touch.clientY - touchOffsetY) + "px";
+    }
+    // 找出手指下方的景點卡
+    touchClone && (touchClone.style.display = "none");
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    touchClone && (touchClone.style.display = "");
+    const targetCard = el && el.closest(".spot-card");
+    document.querySelectorAll(".spot-card").forEach(c => c.classList.remove("drop-above", "drop-below"));
+    if (targetCard && targetCard !== card) {
+      const rect = targetCard.getBoundingClientRect();
+      const isAbove = touch.clientY < rect.top + rect.height / 2;
+      targetCard.classList.toggle("drop-above", isAbove);
+      targetCard.classList.toggle("drop-below", !isAbove);
+    }
+  }, { passive: false });
+
+  handle.addEventListener("touchend", e => {
+    if (!touchDragging) return;
+    touchDragging = false;
+    card.classList.remove("dragging");
+    if (touchClone) { touchClone.remove(); touchClone = null; }
+    document.querySelectorAll(".spot-card").forEach(c => c.classList.remove("drop-above", "drop-below"));
+
+    const touch = e.changedTouches[0];
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    const targetCard = el && el.closest(".spot-card");
+    if (targetCard && targetCard !== card) {
+      const rect = targetCard.getBoundingClientRect();
+      const before = touch.clientY < rect.top + rect.height / 2;
+      const targetId = +targetCard.dataset.spotId;
+      if (!isNaN(targetId) && targetId !== id) moveSpot(id, targetId, before);
     }
     dragId = null;
   });
@@ -861,6 +937,7 @@ function renderLegsInModal() {
   workingLegs.forEach((leg, i) => {
     const row = document.createElement("div");
     row.className = "leg-row";
+    const legCcy = leg.ccy || state.baseCurrency;
     row.innerHTML = `
       <span class="leg-num">${i + 1}</span>
       <select class="leg-mode">
@@ -870,7 +947,9 @@ function renderLegsInModal() {
       <input type="number" class="leg-mins" min="0" max="240" value="${leg.mins || 0}" />
       <span class="leg-mins-label">分</span>
       <input type="number" class="leg-cost" min="0" placeholder="費用" value="${leg.cost || 0}" />
-      <span class="leg-cost-label">TWD</span>
+      <select class="leg-ccy">
+        ${CURRENCIES.map(c => `<option value="${c.code}" ${c.code === legCcy ? "selected" : ""}>${c.code}</option>`).join("")}
+      </select>
       <button class="icon-btn tiny del leg-del-btn" title="刪除這段">✕</button>
       <input type="text" class="leg-from" placeholder="從哪裡" value="${escapeHtml(leg.from || "")}" />
       <span class="leg-arrow">→</span>
@@ -887,6 +966,10 @@ function renderLegsInModal() {
     });
     row.querySelector(".leg-cost").addEventListener("input", e => {
       workingLegs[i].cost = Math.max(0, +e.target.value || 0);
+      updateLegsTotal();
+    });
+    row.querySelector(".leg-ccy").addEventListener("change", e => {
+      workingLegs[i].ccy = e.target.value;
       updateLegsTotal();
     });
     row.querySelector(".leg-from").addEventListener("input", e => {
@@ -908,10 +991,12 @@ function renderLegsInModal() {
 
 function updateLegsTotal() {
   const totMins = workingLegs.reduce((n, l) => n + (+l.mins || 0), 0);
-  const totCost = workingLegs.reduce((n, l) => n + (+l.cost || 0), 0);
+  const baseCcy = state.baseCurrency;
+  const totCost = workingLegs.reduce((n, l) =>
+    n + convertAmount(+l.cost || 0, l.ccy || baseCcy, baseCcy), 0);
   $("legsTotal").textContent = totMins;
   const costEl = $("legsTotalCost");
-  if (costEl) costEl.textContent = totCost.toLocaleString();
+  if (costEl) costEl.textContent = `${Math.round(totCost).toLocaleString()} ${baseCcy}`;
 }
 
 $("addLegBtn").addEventListener("click", () => {
@@ -923,6 +1008,7 @@ $("addLegBtn").addEventListener("click", () => {
     from: last?.to || "",
     to: "",
     cost: 0,
+    ccy: state.baseCurrency,
   });
   renderLegsInModal();
 });
@@ -937,6 +1023,7 @@ $("saveLegsBtn").addEventListener("click", () => {
       mode: l.mode,
       mins: Math.max(0, +l.mins || 0),
       cost: Math.max(0, +l.cost || 0),
+      ccy:  l.ccy || state.baseCurrency,
       from: (l.from || "").trim(),
       to:   (l.to   || "").trim(),
     }));
@@ -953,7 +1040,152 @@ $("saveLegsBtn").addEventListener("click", () => {
 let editingSpotId = null;
 let tempPhotos = [];    // 編輯中的照片陣列（最多 3 張）
 let tempShopItems = []; // 編輯中的購物清單
+let tempLat = null;     // 查地址時暫存座標
+let tempLng = null;
+let tempGeoKey = "";    // 暫存座標對應的地址，避免手動改地址後沿用舊座標
+let addrLookupSeq = 0;
+let lastNominatimLookupAt = 0;
 let chosenCategory = "sight";
+
+function normalizeGeoKey(value = "") {
+  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function normalizeCoords(lat, lng) {
+  const nLat = Number(lat);
+  const nLng = Number(lng);
+  if (!Number.isFinite(nLat) || !Number.isFinite(nLng)) return null;
+  if (nLat < -90 || nLat > 90 || nLng < -180 || nLng > 180) return null;
+  return { lat: nLat, lng: nLng };
+}
+
+function resetTempCoords() {
+  tempLat = null;
+  tempLng = null;
+  tempGeoKey = "";
+}
+
+function setTempCoords(lat, lng, sourceText) {
+  const coords = normalizeCoords(lat, lng);
+  if (!coords) {
+    resetTempCoords();
+    return false;
+  }
+  tempLat = coords.lat;
+  tempLng = coords.lng;
+  tempGeoKey = normalizeGeoKey(sourceText);
+  return true;
+}
+
+function getSpotCoords(spot) {
+  return normalizeCoords(spot?.lat, spot?.lng);
+}
+
+function getGeoCacheHit(query) {
+  const key = normalizeGeoKey(query);
+  if (!key || !state.geoCache) return null;
+  const hit = state.geoCache[key];
+  const coords = normalizeCoords(hit?.lat, hit?.lng);
+  return coords ? { ...hit, ...coords } : null;
+}
+
+function saveGeoCache(query, result) {
+  const key = normalizeGeoKey(query);
+  const coords = normalizeCoords(result?.lat, result?.lng);
+  if (!key || !coords) return;
+  state.geoCache[key] = {
+    addr: result.addr || query,
+    lat: coords.lat,
+    lng: coords.lng,
+    source: result.source || "Nominatim",
+  };
+  const addrKey = normalizeGeoKey(result.addr);
+  if (addrKey && addrKey !== key) state.geoCache[addrKey] = state.geoCache[key];
+}
+
+function fetchOptionsWithTimeout(ms = 5000) {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return { signal: AbortSignal.timeout(ms) };
+  }
+  return {};
+}
+
+async function fetchJsonWithTimeout(url, ms = 5000) {
+  const res = await fetch(url, fetchOptionsWithTimeout(ms));
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function waitForNominatimSlot() {
+  const waitMs = Math.max(0, 1100 - (Date.now() - lastNominatimLookupAt));
+  if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs));
+  lastNominatimLookupAt = Date.now();
+}
+
+function photonResultToGeo(feature, query) {
+  if (!feature) return null;
+  const coords = normalizeCoords(feature.geometry?.coordinates?.[1], feature.geometry?.coordinates?.[0]);
+  if (!coords) return null;
+  const p = feature.properties || {};
+  const parts = [
+    p.name,
+    p.street && p.housenumber ? `${p.street} ${p.housenumber}` : (p.street || ""),
+    p.district,
+    p.city,
+    p.state,
+    p.country,
+  ].filter(Boolean);
+  return {
+    addr: [...new Set(parts)].join(", ") || query,
+    lat: coords.lat,
+    lng: coords.lng,
+    source: "OpenStreetMap",
+  };
+}
+
+function nominatimResultToGeo(item, query) {
+  const coords = normalizeCoords(item?.lat, item?.lon);
+  if (!coords) return null;
+  return {
+    addr: item.display_name || query,
+    lat: coords.lat,
+    lng: coords.lng,
+    source: "Nominatim",
+  };
+}
+
+async function geocodeAddress(query, options = {}) {
+  const q = String(query || "").trim();
+  if (!q) return null;
+
+  const cached = getGeoCacheHit(q);
+  if (cached) return cached;
+
+  if (options.usePhoton) {
+    try {
+      const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=zh`;
+      const data = await fetchJsonWithTimeout(url, 5000);
+      const result = photonResultToGeo(data.features?.[0], q);
+      if (result) {
+        saveGeoCache(q, result);
+        return result;
+      }
+    } catch {}
+  }
+
+  try {
+    await waitForNominatimSlot();
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&accept-language=zh-TW,zh`;
+    const data = await fetchJsonWithTimeout(url, 5000);
+    const result = nominatimResultToGeo(data?.[0], q);
+    if (result) {
+      saveGeoCache(q, result);
+      return result;
+    }
+  } catch {}
+
+  return null;
+}
 
 // 景點幣別下拉（初始化一次）
 $("spotCostCcy").innerHTML = CURRENCIES.map(c =>
@@ -983,6 +1215,7 @@ function setCategory(id) {
 $("addSpotBtn").addEventListener("click", openSpotModalForNew);
 
 function openSpotModalForNew() {
+  addrLookupSeq++;
   editingSpotId = null;
   $("spotModalTitle").textContent = "📍 新增一個景點";
   $("saveSpot").textContent = "加進行程";
@@ -1002,6 +1235,7 @@ function openSpotModalForNew() {
 function openSpotModalForEdit(id) {
   const spot = state.days[state.currentDay].find(s => s.id === id);
   if (!spot) return;
+  addrLookupSeq++;
   editingSpotId = id;
   $("spotModalTitle").textContent = "✏️ 編輯景點";
   $("saveSpot").textContent = "儲存變更";
@@ -1013,6 +1247,7 @@ function openSpotModalForEdit(id) {
   $("spotCostCcy").value = spot.costCcy || state.baseCurrency;
   $("spotNote").value = spot.note || "";
   setCategory(spot.category || "sight");
+  setTempCoords(spot.lat, spot.lng, spot.addr || spot.name);
   tempPhotos = Array.isArray(spot.photos) ? [...spot.photos] : [];
   tempShopItems = (spot.shopItems || []).map(it => ({ photo: "", ...it }));
   renderPhotoGallery();
@@ -1031,6 +1266,7 @@ function resetSpotForm() {
   $("spotNote").value = "";
   $("addrHint").textContent = "";
   setCategory("sight");
+  resetTempCoords();
   tempPhotos = [];
   tempShopItems = [];
   renderPhotoGallery();
@@ -1175,50 +1411,52 @@ function addShopItem() {
 $("spotShopAddBtn").addEventListener("click", addShopItem);
 $("spotShopInput").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addShopItem(); } });
 
+$("spotName").addEventListener("input", () => {
+  addrLookupSeq++;
+  if (!$("spotAddr").value.trim()) resetTempCoords();
+});
+$("spotAddr").addEventListener("input", () => {
+  addrLookupSeq++;
+  if (tempGeoKey && normalizeGeoKey($("spotAddr").value) !== tempGeoKey) resetTempCoords();
+});
+
 // ---- 地址自動查詢 ----
 // 策略：先試 Photon（komoot，CORS 友好、日文效果佳），再試 Nominatim
 async function lookupAddress(query) {
+  const q = String(query || "").trim();
+  if (!q) return null;
+
   const hintEl = $("addrHint");
+  const token = ++addrLookupSeq;
+  const startedEditingId = editingSpotId;
+  const startedNameKey = normalizeGeoKey($("spotName").value);
+  const startedAddrKey = normalizeGeoKey($("spotAddr").value);
+
   hintEl.textContent = "🔍 查詢中…";
   hintEl.style.color = "";
+  resetTempCoords();
 
-  // 1️⃣ Photon (komoot) — 免費、CORS 支援好
-  try {
-    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=1&lang=zh`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    const data = await res.json();
-    if (data.features && data.features[0]) {
-      const p = data.features[0].properties;
-      const parts = [p.name, p.street && p.housenumber ? `${p.street} ${p.housenumber}` : (p.street || ""),
-                     p.district, p.city, p.state, p.country].filter(Boolean);
-      // 若第一個 name 跟查詢相同，就不重複顯示
-      const addr = [...new Set(parts)].join(", ");
-      if (addr) {
-        $("spotAddr").value = addr;
-        hintEl.textContent = "✅ 已帶入地址（來源：OpenStreetMap），可再手動調整";
-        hintEl.style.color = "#3C8D6A";
-        return;
-      }
-    }
-  } catch {}
+  const result = await geocodeAddress(q, { usePhoton: true });
+  const stillCurrent =
+    token === addrLookupSeq &&
+    editingSpotId === startedEditingId &&
+    normalizeGeoKey($("spotName").value) === startedNameKey &&
+    normalizeGeoKey($("spotAddr").value) === startedAddrKey;
+  if (!stillCurrent) return result;
 
-  // 2️⃣ Nominatim fallback
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&accept-language=zh-TW,zh`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    const data = await res.json();
-    if (data && data[0]) {
-      $("spotAddr").value = data[0].display_name;
-      hintEl.textContent = "✅ 已帶入地址（來源：Nominatim），可再手動調整";
-      hintEl.style.color = "#3C8D6A";
-      return;
-    }
-  } catch {}
+  if (result) {
+    $("spotAddr").value = result.addr;
+    setTempCoords(result.lat, result.lng, result.addr);
+    hintEl.textContent = `✅ 已帶入地址（來源：${result.source}），可再手動調整`;
+    hintEl.style.color = "#3C8D6A";
+    return result;
+  }
 
   // 兩個都失敗 → 提示用 Google Maps 複製
-  const gUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
+  const gUrl = `https://www.google.com/maps/search/${encodeURIComponent(q)}`;
   hintEl.innerHTML = `😅 自動查不到，請 <a href="${gUrl}" target="_blank" rel="noopener" style="color:#3A5BC7">開 Google Maps</a> 手動複製地址`;
   hintEl.style.color = "#C26B4A";
+  return null;
 }
 
 // 離開景點名稱欄位 → 若地址空，自動查
@@ -1241,10 +1479,16 @@ $("lookupAddrBtn").addEventListener("click", () => {
 $("saveSpot").addEventListener("click", () => {
   const name = $("spotName").value.trim();
   if (!name) { alert("景點名稱不能空白喔 🐱"); return; }
+  const addr = $("spotAddr").value.trim();
+  const tempCoords = normalizeGeoKey(addr) === tempGeoKey
+    ? normalizeCoords(tempLat, tempLng)
+    : null;
 
   const data = {
     name,
-    addr: $("spotAddr").value.trim(),
+    addr,
+    lat: tempCoords?.lat ?? null,
+    lng: tempCoords?.lng ?? null,
     start: $("spotStart").value,
     costCcy: $("spotCostCcy").value,
     dur: Math.max(0, +$("spotDur").value || 0),
@@ -1259,7 +1503,16 @@ $("saveSpot").addEventListener("click", () => {
   let changedIdx;
   if (editingSpotId) {
     const i = list.findIndex(s => s.id === editingSpotId);
+    if (i < 0) return;
     const old = list[i];
+    // 地址沒變且沒查到新座標 → 保留舊座標
+    if (data.lat == null && normalizeGeoKey(old.addr) === normalizeGeoKey(data.addr)) {
+      const oldCoords = getSpotCoords(old);
+      if (oldCoords) {
+        data.lat = oldCoords.lat;
+        data.lng = oldCoords.lng;
+      }
+    }
     Object.assign(old, data);
     changedIdx = i;
   } else {
@@ -1273,6 +1526,8 @@ $("saveSpot").addEventListener("click", () => {
   }
   // 新增／改了景點後，時間從這個點往後連動
   cascadeTimes(changedIdx + 1);
+  addrLookupSeq++;
+  resetTempCoords();
   persist();
   closeModal(spotModal);
   renderAll();
@@ -1830,52 +2085,236 @@ $("addCategoryBtn").addEventListener("click", () => {
   renderPrep();
 });
 
+// ---- ✨ 行前準備：目的地知識庫 + RestCountries API ----
+
+const DESTINATION_KB = {
+  japan: {
+    pattern: /日本|京都|東京|大阪|沖繩|北海道|名古屋|札幌|福岡|横浜|奈良|嵐山|箱根|淺草|新宿|渋谷|關西|關東|神戶|廣島|仙台/i,
+    hint: "日本", countryNameEn: "Japan",
+    visa: "🛂 台灣護照免簽入境 90 天（免辦任何手續）",
+    plug: "🔌 A 型插座，110V，與台灣相同，無需轉接頭",
+    emergency: "🚨 警察 110・救護 / 消防 119",
+    transport: ["🚇 辦 Suica / ICOCA 交通 IC 卡（機場即可辦）", "📱 下載 Google Maps + 乗換案内 APP", "🛤️ 新幹線跨城市建議提前訂位"],
+    money: ["💴 現金使用率極高，建議換足夠日幣", "💳 大型店家接受信用卡，傳統商店、神社建議備現金"],
+    customs: ["👟 進室內、旅館、部分餐廳需脫鞋", "🚭 禁止邊走邊吸菸，請找指定吸菸區", "🙅 餐廳不需給小費，給了反而失禮", "🗑️ 街上垃圾桶很少，垃圾請帶回去丟"],
+    health: [],
+    misc: ["🏪 便利商店（全家 / 7-11 / 羅森）超好用，可提款、寄行李", "📦 行李宅配服務方便，可提前寄到下個住宿", "🌸 賞花 / 楓葉季人潮超多，景點建議早到"],
+  },
+  korea: {
+    pattern: /韓國|首爾|釜山|濟州|明洞|江南|弘大|仁川|大邱|光州|水原/i,
+    hint: "韓國", countryNameEn: "South Korea",
+    visa: "🛂 台灣護照免簽 90 天，但需事先申請 K-ETA（約 10 分鐘，免費）",
+    plug: "🔌 C / F 型插座，220V，需攜帶轉接頭",
+    emergency: "🚨 警察 112・救護 / 消防 119",
+    transport: ["🚇 辦 T-money 交通卡（機場、便利商店皆可）", "📱 下載 Naver Map（比 Google Maps 準）", "🚕 Kakao T APP 叫計程車最方便"],
+    money: ["💶 韓元 ATM 提領方便，VISA / Master 廣泛接受", "💳 大部分餐廳、商店都可刷卡"],
+    customs: ["🥢 韓國用湯匙夾菜，筷子用於固定", "🍺 長輩倒酒時用雙手接", "🚿 韓式汗蒸幕浴場：男女分區，需裸體進入大池"],
+    health: [],
+    misc: ["🛍️ 明洞、東大門化妝品購物天堂，退稅記得索取", "📺 聖水洞 / 延南洞為韓劇取景熱點", "🌡️ 冬天 (-10°C) 需備厚外套、暖暖包"],
+  },
+  thailand: {
+    pattern: /泰國|曼谷|清邁|普吉|芭達雅|蘇美島|清萊|華欣/i,
+    hint: "泰國", countryNameEn: "Thailand",
+    visa: "🛂 台灣護照免簽 60 天",
+    plug: "🔌 A / B / C 型插座，220V，建議帶萬用轉接頭",
+    emergency: "🚨 警察 191・救護 1669・旅遊警察 1155",
+    transport: ["📱 下載 Grab APP 叫車（比路邊計程車便宜安全）", "🛺 嘟嘟車建議先議價", "🚤 曼谷可搭昭披耶河船班"],
+    money: ["💵 泰銖現金使用廣泛，建議換現金", "🏧 ATM 提領手續費較高，建議一次多領"],
+    customs: ["⛪ 進寺廟需遮蓋手臂和膝蓋（備薄外套 / 紗龍）", "🙏 見到佛像、僧侶要尊重，勿隨意觸碰", "👑 皇室照片、物品嚴禁批評"],
+    health: ["🦟 東南亞蚊子多，帶防蚊液（含 DEET）", "💧 自來水不可生飲，買瓶裝水", "💊 備止瀉藥，路邊攤注意衛生"],
+    misc: ["🌴 雨季（5-10月）午後常下大雨，帶雨具", "☀️ 防曬乳是必備，日曬強烈", "🏖️ 海灘活動豐富，帶泳裝、防水相機"],
+  },
+  singapore: {
+    pattern: /新加坡|獅城/i,
+    hint: "新加坡", countryNameEn: "Singapore",
+    visa: "🛂 台灣護照免簽 30 天",
+    plug: "🔌 G 型插座（英式三孔），240V，需轉接頭",
+    emergency: "🚨 警察 999・救護 / 消防 995",
+    transport: ["🚇 辦 EZ-Link 卡搭 MRT / 巴士", "📱 Grab APP 叫車", "🚖 機場到市區搭 MRT 最方便"],
+    money: ["💳 信用卡幾乎通用，現金需求低", "💵 新幣，ATM 提款方便"],
+    customs: ["🚫 嚼口香糖違法（不可攜入）", "🚭 公共場所嚴禁吸菸罰款重", "🌱 乾淨城市，亂丟垃圾重罰"],
+    health: [],
+    misc: ["🌧️ 全年高溫多雨，短袖為主但室內冷氣強，帶薄外套", "🍜 小販中心（Hawker Centre）平價美食天堂", "🦁 新加坡動物園、濱海花園必去"],
+  },
+  hongkong: {
+    pattern: /香港|九龍|旺角|銅鑼灣|尖沙咀|大嶼山|離島/i,
+    hint: "香港", countryNameEn: "Hong Kong",
+    visa: "🛂 台灣護照免簽 90 天",
+    plug: "🔌 G 型插座（英式三孔），220V，需轉接頭",
+    emergency: "🚨 警察 / 救護 / 消防 999",
+    transport: ["🚇 辦八達通（Octopus）卡搭地鐵、巴士、渡輪", "🚌 巴士雙層、叮叮電車是特色體驗", "🚢 天星小輪：維港渡輪超值"],
+    money: ["💳 信用卡通用，市場、路邊攤用現金", "💵 港幣，機場換匯匯率不好"],
+    customs: ["🍽️ 飲茶禮儀：倒茶後輕敲桌面表示感謝", "🗣️ 廣東話為主，普通話溝通可"],
+    health: [],
+    misc: ["🌃 維多利亞港夜景最佳位置：尖沙咀海濱", "🛍️ 旺角、銅鑼灣購物退稅注意"],
+  },
+  vietnam: {
+    pattern: /越南|河內|胡志明|峴港|會安|下龍灣|芽莊|富國島/i,
+    hint: "越南", countryNameEn: "Vietnam",
+    visa: "🛂 台灣護照免簽 45 天",
+    plug: "🔌 A / C 型插座，220V，建議帶轉接頭",
+    emergency: "🚨 警察 113・救護 115・消防 114",
+    transport: ["📱 Grab APP 叫車必備（避免被坑）", "🛵 摩托車計程車（Xe ôm）需議價", "🚆 河內↔胡志明：建議搭火車體驗沿途風景"],
+    money: ["💵 越南盾（VND）面額大，建議換現金", "🏧 ATM 提款手續費高，一次多領"],
+    customs: ["⛪ 進廟宇需脫鞋、衣著保守", "🤝 還價是文化，市場、路邊攤正常議價"],
+    health: ["🦟 防蚊液必備（含 DEET）", "💧 自來水不可生飲，買瓶裝水", "💊 備腸胃藥，路邊攤衛生狀況不一"],
+    misc: ["☀️ 防曬必備，天氣炎熱", "🍜 越式河粉（Phở）、法國麵包（Bánh mì）必吃", "🎨 會安古鎮：夜晚提燈節超浪漫"],
+  },
+  malaysia: {
+    pattern: /馬來西亞|馬來|吉隆坡|檳城|沙巴|馬六甲|亞庇|古晉/i,
+    hint: "馬來西亞", countryNameEn: "Malaysia",
+    visa: "🛂 台灣護照免簽 30 天",
+    plug: "🔌 G 型插座（英式三孔），240V，需轉接頭",
+    emergency: "🚨 警察 999・救護 / 消防 994",
+    transport: ["📱 Grab APP 叫車", "🚇 吉隆坡有 MRT / LRT / 單軌列車", "🚌 城際長途巴士方便"],
+    money: ["💵 馬幣（Ringgit），信用卡廣泛接受", "🏧 ATM 提款手續費合理"],
+    customs: ["🕌 清真寺需脫鞋、女性包頭巾", "🚫 清真食品（Halal）文化注意，豬肉不普遍", "🤝 馬來人用右手遞東西、進食"],
+    health: ["🦟 東南亞防蚊", "💧 自來水部分地區可飲，建議買瓶裝"],
+    misc: ["🌴 美食天堂：椰漿飯（Nasi Lemak）、肉骨茶必吃", "🏖️ 沙巴潛水、海島超美"],
+  },
+  indonesia: {
+    pattern: /印尼|峇里島|巴里|雅加達|日惹|龍目島|科莫多/i,
+    hint: "印尼 / 峇里島", countryNameEn: "Indonesia",
+    visa: "🛂 台灣護照可免簽（Visa Free）30 天入境峇里島等特定機場",
+    plug: "🔌 C / F 型插座，220V，需轉接頭",
+    emergency: "🚨 警察 110・救護 118・消防 113",
+    transport: ["📱 Grab / Gojek APP 叫車", "🛵 峇里島租摩托車需國際駕照（機車）", "🚤 島嶼間搭快艇"],
+    money: ["💵 印尼盾（IDR）面額超大（1台幣≈約500IDR）", "💳 觀光區信用卡可用，現金仍重要"],
+    customs: ["⛪ 進廟宇需圍紗龍（sarong），部分廟宇提供", "🤲 遞東西、吃東西用右手，左手視為不潔", "🐕 伊斯蘭教徒較多，對狗敏感"],
+    health: ["🦟 防蚊液必備", "💧 自來水不可生飲", "☀️ 防曬必備"],
+    misc: ["🌺 峇里島印度教文化獨特，廟宇祭祀隨處可見", "🏄 衝浪聖地，初學者到庫塔 / Seminyak", "🌋 行程避開火山警告期間"],
+  },
+  europe: {
+    pattern: /巴黎|倫敦|羅馬|柏林|阿姆斯特丹|維也納|布拉格|巴塞隆納|馬德里|雅典|里斯本|布達佩斯|義大利|法國|德國|英國|西班牙|荷蘭|奧地利|葡萄牙|瑞士|比利時|瑞典|挪威|丹麥|芬蘭|捷克|波蘭|匈牙利|希臘|冰島/i,
+    hint: "歐洲", countryNameEn: null,
+    visa: "🛂 台灣護照免申根簽證，可免簽 90 天（180 天內）",
+    plug: "🔌 C / E / F 型插座（英國用 G 型），220-240V，需轉接頭",
+    emergency: "🚨 全歐洲通用緊急電話：112",
+    transport: ["🚂 歐洲火車（Eurail Pass）跨國方便，建議提前訂", "📱 Google Maps 導航準確", "✅ 乘車前記得打票 / 刷卡驗票（逃票罰款高）"],
+    money: ["💶 申根區多用歐元，英國用英鎊，部分國家有自己貨幣", "💳 信用卡廣泛接受", "💰 餐廳小費約 10%（部分國家不強制）"],
+    customs: ["🎒 扒手猖獗，羅馬、巴黎、巴塞隆納特別注意", "📸 部分教堂、博物館禁止拍照", "🕐 歐洲用餐時間晚，餐廳 7-8 點才開始熱絡"],
+    health: [],
+    misc: ["🗺️ 城市間距離遠，規劃路線很重要", "☀️ 夏季日落晚（9-10 點），冬季 4 點天黑", "🌨️ 北歐、冰島天氣多變，備足禦寒衣物"],
+  },
+  us: {
+    pattern: /美國|紐約|洛杉磯|舊金山|拉斯維加斯|西雅圖|波士頓|芝加哥|邁阿密|夏威夷|奧蘭多|華盛頓/i,
+    hint: "美國", countryNameEn: "United States",
+    visa: "🛂 台灣護照需申請 ESTA（電子旅行許可，約 20 USD，建議 72 小時前申請）",
+    plug: "🔌 A / B 型插座，110-120V，與台灣相容，但電壓不同，確認電器支援",
+    emergency: "🚨 警察 / 救護 / 消防 911",
+    transport: ["🚗 美國地大，租車自駕最方便", "✈️ 城市間距離遠，國內線飛機節省時間", "🚕 Uber / Lyft APP 叫車"],
+    money: ["💵 美金，信用卡通行無阻", "💰 餐廳小費 15-20%（必給，服務生薪資低）", "🏨 飯店行李員、房務也需給小費"],
+    customs: ["🤝 美國人打招呼熱情，eye contact 重要", "🚬 大多數州室內禁菸", "⛽ 加油站通常自助加油"],
+    health: ["💊 醫療費用極貴，旅遊保險務必購買"],
+    misc: ["🛒 超市 / 藥妝（Walgreens / CVS）購物方便", "🏪 24小時商店多", "📱 手機需開通國際漫遊或買當地 SIM 卡"],
+  },
+  australia: {
+    pattern: /澳洲|澳大利亞|雪梨|墨爾本|布里斯本|黃金海岸|凱恩斯|珀斯|阿德雷德|大堡礁/i,
+    hint: "澳洲", countryNameEn: "Australia",
+    visa: "🛂 台灣護照需申請 ETA（電子旅遊簽，約 20 AUD，APP 可辦）",
+    plug: "🔌 I 型插座（斜三孔），240V，需轉接頭",
+    emergency: "🚨 警察 / 救護 / 消防 000",
+    transport: ["🚗 左駕國家，建議習慣後再租車", "🚇 雪梨、墨爾本有地鐵，辦 Opal / Myki 卡", "🚌 城市間可搭灰狗巴士或國內線"],
+    money: ["💵 澳幣，信用卡廣泛接受", "💳 幾乎不需小費（不是文化）"],
+    customs: ["🌞 紫外線超強，防曬必備", "🐍 野外注意蛇、蜘蛛等毒生物", "🌊 海灘游泳在有救生員的紅黃旗之間"],
+    health: ["☀️ 澳洲紫外線全球最強，SPF50+ 防曬必備"],
+    misc: ["🦘 野生動物豐富，袋鼠、無尾熊", "🎿 南澳冬季可滑雪", "🌺 大堡礁潛水 / 浮潛必體驗"],
+  },
+};
+
+// 插座規格查詢（從 RestCountries 取得的 cca2 國碼）
+const PLUG_BY_CCA2 = {
+  JP: "A 型（110V，與台灣相同）無需轉接頭",
+  US: "A/B 型（110V），電壓與台灣相同",
+  CA: "A/B 型（110V）",
+  KR: "C/F 型（220V），需轉接頭",
+  TH: "A/B/C 型（220V），建議帶萬用轉接頭",
+  SG: "G 型英式三孔（240V），需轉接頭",
+  HK: "G 型英式三孔（220V），需轉接頭",
+  GB: "G 型英式三孔（240V），需轉接頭",
+  AU: "I 型斜三孔（240V），需轉接頭",
+  NZ: "I 型斜三孔（240V），需轉接頭",
+  CN: "A/C/I 型（220V），建議帶萬用轉接頭",
+  VN: "A/C 型（220V），建議帶轉接頭",
+  MY: "G 型英式三孔（240V），需轉接頭",
+  ID: "C/F 型（220V），需轉接頭",
+  PH: "A/B/C 型（220V），建議帶轉接頭",
+};
+
+async function fetchCountryInfo(countryNameEn) {
+  if (!countryNameEn) return null;
+  try {
+    const res = await fetch(
+      `https://restcountries.com/v3.1/name/${encodeURIComponent(countryNameEn)}?fields=name,currencies,languages,capital,idd,cca2,region`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    const data = await res.json();
+    if (Array.isArray(data) && data[0]) return data[0];
+  } catch {}
+  return null;
+}
+
 // ---- ✨ AI 建議行前準備（參考整趟行程） ----
-// 會根據 → 天數、目的地、月份、是否出國、各類景點數量，組出貼心清單
-function generateAIPrep() {
+async function generateAIPrep() {
   const allSpots = Object.values(state.days).flat();
-  const dayCount = Object.keys(state.days).length;
+  const dayCount  = Object.keys(state.days).length;
   const spotCount = allSpots.length;
   const hotelCount    = allSpots.filter(s => s.category === "hotel").length;
   const shoppingCount = allSpots.filter(s => s.category === "shopping").length;
   const foodCount     = allSpots.filter(s => s.category === "food").length;
+  const natureCount   = allSpots.filter(s => s.category === "nature").length;
 
-  // 把整趟所有「文字資訊」串起來分析
   const text = [
-    state.meta.title || "",
-    state.meta.dates || "",
-    state.travel?.outbound?.departFrom || "",
-    state.travel?.outbound?.arriveTo || "",
+    state.meta.title || "", state.meta.dates || "",
+    state.travel?.outbound?.departFrom || "", state.travel?.outbound?.arriveTo || "",
     ...allSpots.map(s => `${s.name} ${s.addr || ""} ${s.note || ""}`),
   ].join(" ");
 
-  // 偵測目的地（簡單關鍵字版，正式版可接 AI）
-  const destinations = {
-    japan:  { pattern: /日本|京都|東京|大阪|沖繩|北海道|名古屋|札幌|福岡|横浜|奈良|嵐山|箱根|淺草|新宿|渋谷|關西|關東/i,
-              hint: "日本", currency: "日幣", extraTodo: ["📲 下載 Google 翻譯 + 日文離線包", "🚇 查 IC 卡（Suica / ICOCA）儲值"] },
-    korea:  { pattern: /韓國|首爾|釜山|濟州|明洞|江南|弘大/i,
-              hint: "韓國", currency: "韓幣", extraTodo: ["📲 下載 Naver Map / KakaoMap", "🚇 查 T-money 卡"] },
-    thailand:{ pattern: /泰國|曼谷|清邁|普吉|芭達雅/i,
-              hint: "泰國", currency: "泰銖", extraTodo: ["💉 確認黃皮書 / 疫苗", "🦟 帶防蚊液"] },
-    europe: { pattern: /巴黎|倫敦|羅馬|柏林|阿姆|維也納|布拉格|義大利|法國|德國|英國|西班牙|希臘/i,
-              hint: "歐洲", currency: "歐元", extraTodo: ["🔌 注意歐規插頭（兩圓孔）", "🎒 防扒小心隨身包"] },
-    us:     { pattern: /美國|紐約|洛杉磯|舊金山|拉斯維加斯|西雅圖|波士頓|芝加哥/i,
-              hint: "美國", currency: "美金", extraTodo: ["🛂 確認 ESTA 通過 / 簽證", "💵 準備小費（餐廳 15-20%）"] },
-    sea:    { pattern: /新加坡|馬來|吉隆坡|越南|河內|胡志明|印尼|峇里|菲律|宿霧/i,
-              hint: "東南亞", currency: "當地貨幣", extraTodo: ["💉 注意防蚊", "🌧️ 查雨季"] },
-  };
-  let dest = null;
-  for (const [k, v] of Object.entries(destinations)) {
-    if (v.pattern.test(text)) { dest = v; break; }
+  // 比對目的地知識庫
+  let destKB = null;
+  for (const v of Object.values(DESTINATION_KB)) {
+    if (v.pattern.test(text)) { destKB = v; break; }
   }
 
-  const isOverseas = !!dest || (state.travel?.outbound?.type || "").includes("飛機");
+  // 向 RestCountries 查詢即時國家資料
+  let countryInfo = null;
+  if (destKB?.countryNameEn) countryInfo = await fetchCountryInfo(destKB.countryNameEn);
 
-  // 偵測月份（從日期欄位抓第一個月份數字）
+  // 從 RestCountries 取得貨幣、語言資訊
+  let currencyStr = destKB?.hint ? `${destKB.hint}當地貨幣` : "外幣";
+  let langNote = null;
+  let plugNote = destKB ? null : "🔌 確認當地插座規格與電壓";
+  if (countryInfo) {
+    const ccys = Object.entries(countryInfo.currencies || {});
+    if (ccys.length > 0) currencyStr = ccys.map(([code, c]) => `${c.name}（${code}）`).join(" / ");
+    const langs = Object.values(countryInfo.languages || {});
+    if (langs.length > 0 && !langs.some(l => /chinese|mandarin/i.test(l))) {
+      langNote = `📱 建議下載 Google 翻譯 + ${langs[0]} 離線語言包`;
+    }
+    const cca2 = countryInfo.cca2;
+    if (PLUG_BY_CCA2[cca2]) plugNote = `🔌 ${PLUG_BY_CCA2[cca2]}`;
+    else if (destKB?.plug) plugNote = destKB.plug;
+  } else if (destKB?.plug) {
+    plugNote = destKB.plug;
+  }
+
+  const isOverseas = !!destKB || (state.travel?.outbound?.type || "").includes("飛機");
   const monthMatch = (state.meta.dates || "").match(/(\d{1,2})\/\d/);
   const month = monthMatch ? Math.min(12, +monthMatch[1]) : null;
 
-  // ----- 待辦事項（依子分類） -----
+  // 天氣補充提醒
+  const wxItems = [];
+  if (state.weather && Object.keys(state.weather).length > 0) {
+    const codes = Object.values(state.weather).map(w => w.code).filter(c => c != null);
+    const temps = Object.values(state.weather).map(w => w.max).filter(n => n != null);
+    const maxTemp = temps.length ? Math.max(...temps) : null;
+    const minTemp = temps.length ? Math.min(...Object.values(state.weather).map(w => w.min).filter(n => n != null)) : null;
+    if (maxTemp != null && maxTemp >= 30) wxItems.push("☀️ 行程期間高溫，備防曬、補水、薄透氣衣物");
+    if (minTemp != null && minTemp <= 5)  wxItems.push("🥶 行程期間低溫，備厚外套、手套、暖暖包");
+    if (codes.some(c => c >= 51 && c <= 82)) wxItems.push("🌧️ 行程中有雨天，準備雨具 / 防水外套");
+  }
+
+  // ----- 待辦事項 -----
   const todoSubcats = [
     {
       id: "sub-todo-travel", name: "✈️ 交通 & 住宿",
@@ -1883,22 +2322,24 @@ function generateAIPrep() {
         "📅 確認航班 / 車票時間與座位",
         "🏨 確認住宿訂單 + 入住 / 退房時間",
         ...(hotelCount >= 2 ? [`🏨 跨多家住宿（${hotelCount} 間），逐一確認 check-in/out`] : []),
-      ],
-    },
-    {
-      id: "sub-todo-finance", name: "💳 財務 & 保險",
-      items: [
-        `💴 換${dest ? dest.currency : "外幣"} / 提領現金`,
-        "📞 通知信用卡公司海外消費",
-        "🩺 購買旅行保險",
+        ...(destKB?.transport || []),
       ],
     },
     {
       id: "sub-todo-docs", name: "📄 文件 & 簽證",
       items: [
-        ...(isOverseas ? ["🛂 確認護照效期超過 6 個月"] : []),
-        ...(isOverseas ? ["🖨️ 印出訂房 / 訂票確認信備份"] : []),
-        ...(dest ? [`🌐 查 ${dest.hint} 入境規定 / 免簽資格`] : []),
+        ...(isOverseas ? ["🛂 確認護照效期超過 6 個月", "🖨️ 印出訂房 / 訂票確認信備份"] : []),
+        ...(destKB?.visa ? [destKB.visa] : []),
+        ...(isOverseas ? ["🩺 購買旅遊保險（含緊急醫療）"] : []),
+      ],
+    },
+    {
+      id: "sub-todo-finance", name: "💳 財務 & 金錢",
+      items: [
+        `💴 兌換 ${currencyStr}`,
+        "📞 通知信用卡公司開啟海外消費",
+        ...(destKB?.money || []),
+        ...(countryInfo ? [`🚨 當地緊急電話：${destKB?.emergency || "請出發前查詢"}`] : destKB?.emergency ? [destKB.emergency] : []),
       ],
     },
     {
@@ -1906,69 +2347,65 @@ function generateAIPrep() {
       items: [
         "📱 申請當地網路（SIM 卡 / eSIM）",
         "📸 備份手機重要資料 / 雲端",
-        "🌤️ 查當地一週天氣預報",
-        ...(dest ? dest.extraTodo : []),
+        ...(langNote ? [langNote] : []),
+        ...(plugNote ? [plugNote] : []),
+        ...wxItems,
       ],
     },
     {
-      id: "sub-todo-spots", name: "🗺️ 景點 & 餐廳",
+      id: "sub-todo-spots", name: "🗺️ 景點 & 體驗",
       items: [
-        ...(foodCount >= 2 ? [`🍜 預訂熱門餐廳（行程裡有 ${foodCount} 家）`] : []),
-        ...(shoppingCount >= 1 ? [`🛍️ 列出想買清單 / 比價（${shoppingCount} 個購物點）`] : []),
-        ...(spotCount >= 10 ? [`📍 行程豐富（${spotCount} 個景點），建議印一份備用紙本`] : []),
+        ...(foodCount >= 2 ? [`🍜 預訂熱門餐廳（行程有 ${foodCount} 家美食點）`] : []),
+        ...(shoppingCount >= 1 ? [`🛍️ 整理想買清單 / 退稅資格確認（${shoppingCount} 個購物點）`] : []),
+        ...(spotCount >= 10 ? [`📍 行程豐富（${spotCount} 個景點），建議下載離線地圖`] : []),
+        ...(destKB?.customs || []),
       ],
     },
+    ...(destKB?.health?.length ? [{
+      id: "sub-todo-health", name: "💊 健康 & 安全",
+      items: destKB.health,
+    }] : []),
+    ...(destKB?.misc?.length ? [{
+      id: "sub-todo-tips", name: "💡 當地小知識",
+      items: destKB.misc,
+    }] : []),
   ].filter(s => s.items.length > 0);
 
-  // ----- 行李清單（依子分類） -----
+  // ----- 行李清單 -----
   const clothingItems = [`👕 換洗衣物 ×${dayCount + 1} 套`, "🧦 襪子 + 內衣褲", "👟 一雙好走的鞋"];
   if (month != null) {
-    if ([6, 7, 8].includes(month)) {
-      clothingItems.push("☀️ 防曬衣 / 帽子", "🕶️ 太陽眼鏡", "👙 涼感短袖 + 涼鞋");
-    } else if ([12, 1, 2].includes(month)) {
-      clothingItems.push("🧥 厚外套 / 羽絨服", "🧤 手套、毛帽、圍巾", "♨️ 暖暖包");
-    } else if ([3, 4, 5].includes(month)) {
-      clothingItems.push("🧥 薄外套（早晚溫差大）", "🌸 春季款輕薄衣物");
-    } else {
-      clothingItems.push("🧣 洋蔥式穿搭（薄外套 + 內搭）");
-    }
+    if ([6, 7, 8].includes(month))      clothingItems.push("🕶️ 太陽眼鏡", "👒 防曬帽", "👙 涼感短袖 + 涼鞋");
+    else if ([12, 1, 2].includes(month)) clothingItems.push("🧥 厚外套 / 羽絨服", "🧤 手套、毛帽、圍巾", "♨️ 暖暖包");
+    else if ([3, 4, 5].includes(month))  clothingItems.push("🧥 薄外套（早晚溫差大）", "🌸 春季輕薄衣物");
+    else                                 clothingItems.push("🧣 洋蔥式穿搭（薄外套 + 內搭）");
   }
-  if (hotelCount >= 1) clothingItems.push("👘 飯店睡衣 / 過夜衣物");
+  if (hotelCount >= 1) clothingItems.push("👘 過夜衣物 / 睡衣");
+  if (natureCount >= 1) clothingItems.push("🥾 舒適運動鞋 / 健走鞋");
 
   const packingSubcats = [
     {
       id: "sub-pack-docs", name: "🛂 證件 & 文件",
-      items: [
-        "🛂 護照 / 身分證（效期確認）",
-        "✈️ 機票 / 車票 / 訂房確認信",
-        "💳 信用卡 + 提款卡",
-      ],
+      items: ["🛂 護照（效期確認）", "✈️ 機票 / 車票 / 訂房確認信（截圖備份）", "💳 信用卡 + 提款卡（至少兩張）"],
     },
-    {
-      id: "sub-pack-clothing", name: "👕 衣物 & 鞋子",
-      items: clothingItems,
-    },
+    { id: "sub-pack-clothing", name: "👕 衣物 & 鞋子", items: clothingItems },
     {
       id: "sub-pack-toiletries", name: "🧴 洗漱 & 保養",
       items: [
-        "🪥 牙刷 + 牙膏",
-        "🧴 洗髮精 + 沐浴乳（或確認飯店提供）",
-        "💆 保濕乳液 / 護手霜",
-        "☀️ 防曬乳 SPF 50+",
-        "💊 腸胃藥 + 止痛藥",
-        "💊 個人常備藥品 / 暈車藥",
-        ...(foodCount >= 2 ? ["💊 助消化藥（吃多了備用）"] : []),
+        "🪥 牙刷 + 牙膏", "🧴 洗髮精 + 沐浴乳（確認飯店是否提供）",
+        "💆 保濕乳液 / 護手霜", "☀️ 防曬乳 SPF 50+",
+        "💊 腸胃藥 + 止痛藥 + 個人常備藥品",
+        ...(foodCount >= 2 ? ["💊 助消化藥（美食行程備用）"] : []),
+        ...(destKB?.health?.length ? ["🦟 防蚊液（含 DEET）"] : []),
       ],
     },
     {
       id: "sub-pack-electronics", name: "📱 電子設備",
       items: [
-        "📱 手機 + 充電線",
-        "🔋 行動電源（≥ 10000mAh）",
-        "🔌 旅行萬用轉接頭",
-        "📷 相機 + 記憶卡 + 電池",
+        "📱 手機 + 充電線 + 充電頭",
+        "🔋 行動電源（≥ 10000mAh，飛機禁放托運）",
+        ...(plugNote && plugNote.includes("需轉接頭") ? ["🔌 旅行萬用轉接頭"] : []),
+        "📷 相機 + 記憶卡 + 備用電池",
         "🎧 耳機",
-        ...(isOverseas ? ["🔌 確認當地插座規格"] : []),
       ],
     },
     {
@@ -1982,45 +2419,31 @@ function generateAIPrep() {
     },
   ];
 
-  return { todoSubcats, packingSubcats, dest, month };
+  return { todoSubcats, packingSubcats, destKB, countryInfo, month };
 }
 
-function runAiPrep(btn, btnText) {
-  btn.textContent = "🧚 小天使思考中...";
+async function runAiPrep(btn, btnText) {
+  btn.textContent = "🧚 查詢目的地資訊中…";
   btn.disabled = true;
-  setTimeout(() => {
-    const sug = generateAIPrep();
+  try {
+    const sug = await generateAIPrep();
 
-    // 找到「待辦」與「行李」分類，沒有就建
     let todoCat = state.prep.find(c => c.id === "cat-todo" || c.name.includes("待辦"));
     let packCat = state.prep.find(c => c.id === "cat-packing" || c.name.includes("行李"));
-    if (!todoCat) {
-      todoCat = { id: "cat-todo", name: "📋 待辦事項", subcats: [] };
-      state.prep.unshift(todoCat);
-    }
-    if (!packCat) {
-      packCat = { id: "cat-packing", name: "🎒 行李清單", subcats: [] };
-      state.prep.push(packCat);
-    }
+    if (!todoCat) { todoCat = { id: "cat-todo", name: "📋 待辦事項", subcats: [] }; state.prep.unshift(todoCat); }
+    if (!packCat) { packCat = { id: "cat-packing", name: "🎒 行李清單", subcats: [] }; state.prep.push(packCat); }
     if (!todoCat.subcats) todoCat.subcats = [];
     if (!packCat.subcats) packCat.subcats = [];
 
     let added = 0;
-    // 合併 subcats：若同 id 的子分類已存在，補充缺少的項目；否則新增整個子分類
     function mergeSubcats(cat, newSubcats) {
       newSubcats.forEach(newSub => {
         if (!newSub.items || newSub.items.length === 0) return;
         let existing = cat.subcats.find(s => s.id === newSub.id);
-        if (!existing) {
-          existing = { id: newSub.id, name: newSub.name, items: [] };
-          cat.subcats.push(existing);
-        }
-        const allExistingTexts = cat.subcats.flatMap(s => s.items.map(i => i.text));
+        if (!existing) { existing = { id: newSub.id, name: newSub.name, items: [] }; cat.subcats.push(existing); }
+        const allTexts = cat.subcats.flatMap(s => s.items.map(i => i.text));
         newSub.items.forEach(text => {
-          if (!allExistingTexts.includes(text)) {
-            existing.items.push({ id: nextPrepId++, text, done: false });
-            added++;
-          }
+          if (!allTexts.includes(text)) { existing.items.push({ id: nextPrepId++, text, done: false }); added++; }
         });
       });
     }
@@ -2029,15 +2452,20 @@ function runAiPrep(btn, btnText) {
 
     persist();
     renderPrep();
-    btn.textContent = btnText;
-    btn.disabled = false;
-    const ctx = sug.dest ? `偵測到「${sug.dest.hint}」行程` : "依目前行程內容";
+    const destHint = sug.destKB?.hint || "";
+    const source = sug.countryInfo ? "（含網路即時資料）" : "";
+    const ctx = destHint ? `偵測到「${destHint}」行程${source}` : "依目前行程內容";
     if (added === 0) {
       alert(`🧚 旅遊小天使 ${ctx}：清單已經很完整了！若要重新生成，可刪掉舊分類再點一次。`);
     } else {
       alert(`✨ 旅遊小天使${ctx}幫你整理好了，加了 ${added} 個提醒，記得勾掉已完成的～`);
     }
-  }, 700);
+  } catch (err) {
+    alert(`😢 發生錯誤：${err.message}`);
+  } finally {
+    btn.textContent = btnText;
+    btn.disabled = false;
+  }
 }
 $("aiPrepBtn").addEventListener("click", () => runAiPrep($("aiPrepBtn"), "✨ 旅遊小天使建議行前準備"));
 $("aiPrepBtn2").addEventListener("click", () => runAiPrep($("aiPrepBtn2"), "✨ 旅遊小天使建議行前準備"));
@@ -2109,45 +2537,186 @@ function takeAiSnapshot() {
   $("undoAiBtn").hidden = false;
 }
 
-function rearrangeOneDay(dayKey) {
-  const list = state.days[dayKey];
-  if (!list || list.length === 0) return;
-  const dayStart = list[0].start;
-  const oldNextMap = snapshotNextMap(list);
-  // 示範排序：景點名稱字數短的先（之後可接真正 AI）
-  list.sort((a, b) => a.name.length - b.name.length);
-  invalidateChangedEdges(list, oldNextMap);
-  list[0].start = dayStart;
-  cascadeTimesForDay(dayKey, 1);
+// ---- 取得景點座標（有存直接用，沒有就查詢並快取） ----
+async function fetchCoordsForSpot(spot) {
+  const stored = getSpotCoords(spot);
+  if (stored) return stored;
+
+  const q = spot.addr || spot.name;
+  if (!q) return null;
+
+  const result = await geocodeAddress(q);
+  const coords = normalizeCoords(result?.lat, result?.lng);
+  if (coords) {
+    spot.lat = coords.lat;
+    spot.lng = coords.lng;
+    return coords;
+  }
+  return null;
 }
 
-$("askAiBtn").addEventListener("click", () => {
+function haversine(a, b) {
+  if (!a || !b) return Infinity;
+  const R = 6371, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const x = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+}
+
+function routeLegDistance(a, b) {
+  return a && b ? haversine(a, b) : 0;
+}
+
+function routeDistance(items, startCoord, endCoord) {
+  let total = 0;
+  let current = startCoord || null;
+  items.forEach(item => {
+    total += routeLegDistance(current, item.c);
+    current = item.c;
+  });
+  total += routeLegDistance(current, endCoord);
+  return total;
+}
+
+function greedyRoute(items, startCoord, endCoord) {
+  const remaining = [...items];
+  const route = [];
+  let current = startCoord || null;
+
+  while (remaining.length > 0) {
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+    remaining.forEach((item, i) => {
+      const dist = current ? haversine(current, item.c) : routeDistance([item], null, endCoord);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestIdx = i;
+      }
+    });
+    const picked = remaining.splice(nearestIdx, 1)[0];
+    route.push(picked);
+    current = picked.c;
+  }
+
+  return route;
+}
+
+function bestRouteByDistance(items, startCoord, endCoord) {
+  if (items.length <= 1) return [...items];
+  if (items.length > 8) return greedyRoute(items, startCoord, endCoord);
+
+  let best = [...items];
+  let bestDist = Infinity;
+  const used = new Array(items.length).fill(false);
+  const path = [];
+
+  function walk(currentCoord, totalDist) {
+    if (totalDist >= bestDist) return;
+    if (path.length === items.length) {
+      const finalDist = totalDist + routeLegDistance(currentCoord, endCoord);
+      if (finalDist < bestDist) {
+        bestDist = finalDist;
+        best = [...path];
+      }
+      return;
+    }
+
+    items.forEach((item, i) => {
+      if (used[i]) return;
+      used[i] = true;
+      path.push(item);
+      walk(item.c, totalDist + routeLegDistance(currentCoord, item.c));
+      path.pop();
+      used[i] = false;
+    });
+  }
+
+  walk(startCoord || null, 0);
+  return best;
+}
+
+// 固定第一個與最後一個景點，只重排中間有座標的景點。
+async function rearrangeOneDay(dayKey) {
+  const list = state.days[dayKey];
+  if (!list || list.length < 3) {
+    return { dayKey, changed: false, missing: [], skipped: true };
+  }
+  const dayStart = list[0].start;
+  const oldNextMap = snapshotNextMap(list);
+
+  const coords = [];
+  for (const spot of list) {
+    coords.push(await fetchCoordsForSpot(spot));
+  }
+  const missing = list.filter((_, i) => !coords[i]).map(s => s.name);
+
+  const first = { s: list[0], c: coords[0] };
+  const last  = { s: list[list.length - 1], c: coords[list.length - 1] };
+  const middleItems = list.slice(1, -1).map((s, i) => ({ s, c: coords[i + 1] }));
+
+  const withCoords = middleItems.filter(x => x.c);
+  if (withCoords.length < 2) {
+    return { dayKey, changed: false, missing, skipped: true };
+  }
+
+  const sorted = bestRouteByDistance(withCoords, first.c, last.c);
+  const sortedQueue = sorted.map(x => x.s);
+  const middleResult = middleItems.map(item => item.c ? sortedQueue.shift() : item.s);
+  const result = [first.s, ...middleResult, last.s];
+  const changed = result.some((spot, i) => spot.id !== list[i].id);
+  if (!changed) return { dayKey, changed: false, missing, skipped: false };
+
+  list.splice(0, list.length, ...result);
+  const resetLegs = invalidateChangedEdges(list, oldNextMap);
+  list[0].start = dayStart;
+  cascadeTimesForDay(dayKey, 1);
+  return { dayKey, changed: true, missing, resetLegs };
+}
+
+$("askAiBtn").addEventListener("click", async () => {
   const btn = $("askAiBtn");
-  btn.textContent = "🧚 小天使思考中...";
+  const originalText = btn.textContent;
+  btn.textContent = "🧚 查詢座標中…";
   btn.disabled = true;
-  setTimeout(() => {
+  try {
     takeAiSnapshot();
-    rearrangeOneDay(state.currentDay);
+    const result = await rearrangeOneDay(state.currentDay);
     persist();
     renderAll();
-    btn.textContent = "✨ 小天使排今天";
+    if (!result.changed && result.skipped) {
+      alert("這一天沒有足夠的可定位景點可以重排。請先確認中間至少有 2 個景點有地址。");
+    }
+  } catch (err) {
+    console.error(err);
+    alert("重排行程時發生錯誤，請稍後再試。");
+  } finally {
+    btn.textContent = originalText;
     btn.disabled = false;
-  }, 700);
+  }
 });
 
-$("askAiAllBtn").addEventListener("click", () => {
-  if (!confirm("要讓 AI 幫整趟旅行重新排嗎？\n如果不滿意可以按「↩️ 還原」復原。")) return;
+$("askAiAllBtn").addEventListener("click", async () => {
+  if (!confirm("要依地點遠近重新排整趟旅行嗎？\n如果不滿意可以按「↩️ 還原」復原。")) return;
   const btn = $("askAiAllBtn");
-  btn.textContent = "🧚 小天使思考中...";
+  const originalText = btn.textContent;
+  btn.textContent = "🧚 查詢座標中…";
   btn.disabled = true;
-  setTimeout(() => {
+  try {
     takeAiSnapshot();
-    Object.keys(state.days).forEach(d => rearrangeOneDay(d));
+    const results = [];
+    for (const d of Object.keys(state.days)) results.push(await rearrangeOneDay(d));
     persist();
     renderAll();
-    btn.textContent = "🌐 小天使排整趟";
+    if (!results.some(r => r.changed)) {
+      alert("整趟行程沒有足夠的可定位景點可以重排。請先確認每天中間至少有 2 個景點有地址。");
+    }
+  } catch (err) {
+    console.error(err);
+    alert("重排行程時發生錯誤，請稍後再試。");
+  } finally {
+    btn.textContent = originalText;
     btn.disabled = false;
-  }, 1000);
+  }
 });
 
 $("undoAiBtn").addEventListener("click", () => {
@@ -2178,20 +2747,168 @@ function wmoEmoji(code) {
   return "🌡️";
 }
 
+// 地區 / 機場 / 常見中文地名 → Open-Meteo Geocoding 較容易辨識的查詢詞
+const WEATHER_LOCATION_ALIASES = [
+  { keys: ["沖繩", "冲绳", "沖縄", "OKA", "Okinawa", "那霸", "那覇"], label: "那霸", countryCode: "JP", names: ["Naha", "那覇", "那霸"] },
+  { keys: ["關西", "关西", "近畿", "KIX", "大阪"], label: "大阪", countryCode: "JP", names: ["Osaka", "大阪"] },
+  { keys: ["京都", "Kyoto"], label: "京都", countryCode: "JP", names: ["Kyoto", "京都"] },
+  { keys: ["東京", "Tokyo", "成田", "NRT", "羽田", "HND"], label: "東京", countryCode: "JP", names: ["Tokyo", "東京"] },
+  { keys: ["北海道", "札幌", "CTS", "Sapporo"], label: "札幌", countryCode: "JP", names: ["Sapporo", "札幌"] },
+  { keys: ["九州", "福岡", "FUK", "Fukuoka"], label: "福岡", countryCode: "JP", names: ["Fukuoka", "福岡"] },
+  { keys: ["名古屋", "NGO", "Nagoya"], label: "名古屋", countryCode: "JP", names: ["Nagoya", "名古屋"] },
+  { keys: ["首爾", "首尔", "仁川", "ICN", "Seoul"], label: "首爾", countryCode: "KR", names: ["Seoul", "서울", "首爾"] },
+  { keys: ["釜山", "Busan", "PUS"], label: "釜山", countryCode: "KR", names: ["Busan", "부산", "釜山"] },
+  { keys: ["濟州", "济州", "Jeju", "CJU"], label: "濟州", countryCode: "KR", names: ["Jeju", "제주", "濟州"] },
+  { keys: ["曼谷", "Bangkok", "BKK"], label: "曼谷", countryCode: "TH", names: ["Bangkok", "曼谷"] },
+  { keys: ["清邁", "清迈", "Chiang Mai"], label: "清邁", countryCode: "TH", names: ["Chiang Mai", "清邁"] },
+  { keys: ["普吉", "Phuket"], label: "普吉", countryCode: "TH", names: ["Phuket", "普吉"] },
+  { keys: ["新加坡", "Singapore", "SIN"], label: "新加坡", countryCode: "SG", names: ["Singapore", "新加坡"] },
+  { keys: ["香港", "Hong Kong", "HKG"], label: "香港", countryCode: "HK", names: ["Hong Kong", "香港"] },
+  { keys: ["澳門", "澳门", "Macau", "Macao"], label: "澳門", countryCode: "MO", names: ["Macao", "Macau", "澳門"] },
+  { keys: ["台北", "臺北", "Taipei", "TPE"], label: "台北", countryCode: "TW", names: ["Taipei", "台北"] },
+  { keys: ["台中", "臺中", "Taichung"], label: "台中", countryCode: "TW", names: ["Taichung", "台中"] },
+  { keys: ["台南", "臺南", "Tainan"], label: "台南", countryCode: "TW", names: ["Tainan", "台南"] },
+  { keys: ["高雄", "Kaohsiung", "KHH"], label: "高雄", countryCode: "TW", names: ["Kaohsiung", "高雄"] },
+  { keys: ["吉隆坡", "Kuala Lumpur", "KUL"], label: "吉隆坡", countryCode: "MY", names: ["Kuala Lumpur", "吉隆坡"] },
+  { keys: ["檳城", "槟城", "Penang"], label: "檳城", countryCode: "MY", names: ["George Town", "Penang", "檳城"] },
+  { keys: ["峇里", "巴里", "Bali", "DPS"], label: "峇里", countryCode: "ID", names: ["Denpasar", "Bali"] },
+  { keys: ["馬尼拉", "马尼拉", "Manila", "MNL"], label: "馬尼拉", countryCode: "PH", names: ["Manila", "馬尼拉"] },
+  { keys: ["宿霧", "宿雾", "Cebu"], label: "宿霧", countryCode: "PH", names: ["Cebu", "宿霧"] },
+  { keys: ["河內", "河内", "Hanoi"], label: "河內", countryCode: "VN", names: ["Hanoi", "河內"] },
+  { keys: ["胡志明", "Ho Chi Minh", "Saigon"], label: "胡志明市", countryCode: "VN", names: ["Ho Chi Minh City", "Saigon", "胡志明市"] },
+  { keys: ["峴港", "岘港", "Da Nang", "Danang"], label: "峴港", countryCode: "VN", names: ["Da Nang", "峴港"] },
+  { keys: ["巴黎", "Paris"], label: "巴黎", countryCode: "FR", names: ["Paris", "巴黎"] },
+  { keys: ["倫敦", "伦敦", "London"], label: "倫敦", countryCode: "GB", names: ["London", "倫敦"] },
+  { keys: ["羅馬", "罗马", "Rome"], label: "羅馬", countryCode: "IT", names: ["Rome", "Roma", "羅馬"] },
+  { keys: ["米蘭", "米兰", "Milan"], label: "米蘭", countryCode: "IT", names: ["Milan", "Milano", "米蘭"] },
+  { keys: ["紐約", "纽约", "New York", "NYC"], label: "紐約", countryCode: "US", names: ["New York", "New York City", "紐約"] },
+  { keys: ["洛杉磯", "洛杉矶", "Los Angeles", "LAX"], label: "洛杉磯", countryCode: "US", names: ["Los Angeles", "洛杉磯"] },
+  { keys: ["舊金山", "旧金山", "San Francisco", "SFO"], label: "舊金山", countryCode: "US", names: ["San Francisco", "舊金山"] },
+  { keys: ["雪梨", "悉尼", "Sydney"], label: "雪梨", countryCode: "AU", names: ["Sydney", "雪梨"] },
+  { keys: ["墨爾本", "墨尔本", "Melbourne"], label: "墨爾本", countryCode: "AU", names: ["Melbourne", "墨爾本"] },
+];
+
+const REGION_TO_CITY = Object.fromEntries(
+  WEATHER_LOCATION_ALIASES.flatMap(a => a.keys.map(k => [k, a.label]))
+);
+
+function compactLocationText(value = "") {
+  return String(value || "")
+    .replace(/[｜|·・,，。()（）\[\]【】]/g, " ")
+    .replace(/(國際機場|国际机场|機場|机场|Airport|International|Terminal|航廈|第\d航廈|T\d)/gi, " ")
+    .replace(/(旅遊|旅行|行程|計畫|规划|規劃|自由行|小旅行|\d+\s*天|\d+\s*夜)/g, " ")
+    .replace(/^(?:日本|韓國|韩国|한국|泰國|泰国|法國|法国|英國|英国|美國|美国|澳洲|義大利|意大利|西班牙|德國|德国|中國|中国|台灣|臺灣)\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function locationAliasFor(text) {
+  const source = String(text || "");
+  const lower = source.toLowerCase();
+  return WEATHER_LOCATION_ALIASES.find(alias =>
+    alias.keys.some(k => {
+      const key = String(k);
+      return /[A-Za-z]/.test(key)
+        ? lower.includes(key.toLowerCase())
+        : source.includes(key);
+    })
+  ) || null;
+}
+
+function normalizeDestCity(raw) {
+  if (!raw) return raw;
+  const alias = locationAliasFor(raw);
+  if (alias) return alias.label;
+  const stripped = compactLocationText(raw);
+  return locationAliasFor(stripped)?.label || stripped || raw;
+}
+
+function addWeatherCandidate(list, seen, name, countryCode = "", label = "") {
+  const cleaned = compactLocationText(name);
+  if (!cleaned || cleaned.length < 2) return;
+  const key = `${cleaned.toLowerCase()}|${countryCode || ""}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  list.push({ name: cleaned, countryCode, label: label || cleaned });
+}
+
+function buildWeatherGeoCandidates(raw) {
+  const candidates = [];
+  const seen = new Set();
+  const original = String(raw || "").trim();
+  const normalized = normalizeDestCity(original);
+  const sources = [original, normalized, compactLocationText(original)].filter(Boolean);
+
+  WEATHER_LOCATION_ALIASES.forEach(alias => {
+    if (sources.some(s => locationAliasFor(s) === alias)) {
+      alias.names.forEach(name => addWeatherCandidate(candidates, seen, name, alias.countryCode, alias.label));
+    }
+  });
+  sources.forEach(s => addWeatherCandidate(candidates, seen, s));
+  return candidates;
+}
+
+async function geocodeWeatherDestination(raw) {
+  const candidates = buildWeatherGeoCandidates(raw);
+  let lastNetworkError = null;
+  let responseCount = 0;
+
+  for (const c of candidates) {
+    const params = new URLSearchParams({
+      name: c.name,
+      count: "5",
+      language: "zh",
+      format: "json",
+    });
+    if (c.countryCode) params.set("countryCode", c.countryCode);
+
+    try {
+      const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?${params.toString()}`);
+      if (!geoRes.ok) throw new Error(`地點查詢 HTTP ${geoRes.status}`);
+      const geoData = await geoRes.json();
+      responseCount++;
+      if (geoData.error) throw new Error(geoData.reason || "地點查詢 API 錯誤");
+      const result = (geoData.results || []).find(r => !c.countryCode || r.country_code === c.countryCode) || geoData.results?.[0];
+      if (result) return { result, query: c.name, candidates };
+    } catch (err) {
+      lastNetworkError = err;
+    }
+  }
+
+  return { result: null, query: "", candidates, error: responseCount === 0 ? lastNetworkError : null };
+}
+
 function guessDestination() {
-  // 從景點地址找最常出現的地名
+  const allText = [
+    state.travel?.outbound?.arriveTo || "",
+    state.travel?.return?.departFrom || "",
+    state.meta.title || "",
+    ...Object.values(state.days).flat().map(s => `${s.addr || ""} ${s.name || ""}`),
+  ].join(" ");
+
+  const alias = locationAliasFor(allText);
+  if (alias) return alias.label;
+
+  // 從景點地址找日本城市（以都道府県市結尾）
   const addrs = Object.values(state.days).flat().map(s => s.addr).filter(Boolean);
   if (addrs.length > 0) {
     const jpM = addrs.join(" ").match(/([^\s,]+(?:都|道|府|県|市))/);
-    if (jpM) return jpM[1];
+    if (jpM) return normalizeDestCity(jpM[1]);
     const freq = {};
     addrs.forEach(a => a.split(/[\s,，、\n]/).forEach(w => { if (w.length >= 2) freq[w] = (freq[w]||0)+1; }));
     const top = Object.entries(freq).sort((a,b)=>b[1]-a[1])[0];
-    if (top) return top[0];
+    if (top) return normalizeDestCity(top[0]);
   }
+
   // 從行程標題猜
-  const title = (state.meta.title || "").replace(/[旅遊行程計畫天日夜\d]/g, "").trim();
-  return title.split(/[\s\/]/)[0] || null;
+  const title = compactLocationText(state.meta.title || "");
+  const raw = title.split(/[\s\/]/)[0] || null;
+  return normalizeDestCity(raw);
+}
+
+// 查詢時也正規化使用者手動輸入
+function normalizeUserInput(s) {
+  return normalizeDestCity((s || "").trim());
 }
 
 $("fetchWeatherBtn").addEventListener("click", async () => {
@@ -2217,26 +2934,45 @@ $("fetchWeatherBtn").addEventListener("click", async () => {
     const endDate = new Date(startDate);
     endDate.setDate(endDate.getDate() + days.length - 1);
     const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-
-    // 1. 取得目的地
-    let dest = guessDestination();
-    if (!dest) {
-      dest = prompt("✈️ 請輸入目的地城市（例如：東京、首爾、大阪）：");
-      if (!dest) throw new Error("已取消");
+    const endDiffDays = Math.floor((endDate - today) / 86400000);
+    const useHistoricalWeather = endDiffDays < 0;
+    if (!useHistoricalWeather && endDiffDays > 16) {
+      alert(`⚠️ 這趟行程最後一天還有 ${endDiffDays} 天，Open-Meteo 預報只提供 16 天內資料。請縮短查詢天數，或接近出發日再查。`);
+      return;
+    }
+    if (diffDays < 0 && !useHistoricalWeather) {
+      alert("這趟行程橫跨已過去與未來的日期。請先手動設定已過去天數的天氣，或把行程日期調整成完整未來 / 完整過去後再查。");
+      return;
     }
 
-    // 2. Geocoding
-    const geoRes  = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(dest)}&count=1&language=zh`);
-    const geoData = await geoRes.json();
-    if (!geoData.results?.length) throw new Error(`找不到「${dest}」的地理位置，請換個城市名稱試試`);
-    const { latitude, longitude, name: cityName } = geoData.results[0];
+    // 1. 取得目的地（先猜，猜到但查無結果時讓使用者手動輸入）
+    let dest = guessDestination();
+    let geoMatch = null;
+    while (true) {
+      if (!dest) {
+        dest = prompt("✈️ 請輸入目的地城市（例如：東京、首爾、大阪、那霸）：");
+        if (!dest) throw new Error("已取消");
+      }
+      dest = normalizeUserInput(dest);
+      // 2. Geocoding
+      geoMatch = await geocodeWeatherDestination(dest);
+      if (geoMatch.result) break;
+      if (geoMatch.error) throw geoMatch.error;
+      // 找不到 → 提示使用者重新輸入
+      const tried = geoMatch.candidates.map(c => c.name).slice(0, 4).join("、");
+      dest = prompt(`找不到「${dest}」${tried ? `（已試：${tried}）` : ""}，請輸入城市名稱（例如：Tokyo、Osaka、Seoul、Bangkok）：`);
+      if (!dest) throw new Error("已取消");
+    }
+    const { latitude, longitude, name: cityName, country } = geoMatch.result;
 
     // 3. 天氣預報（Open-Meteo 免費，無需 API key）
-    // 新版 API 用 weather_code，舊版用 weathercode，兩個都帶
-    const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
-      `&daily=weather_code,weathercode,temperature_2m_max,temperature_2m_min` +
-      `&timezone=auto&start_date=${fmt(startDate)}&end_date=${fmt(endDate)}` +
-      `&forecast_days=16`;
+    // 注意：forecast_days 不可與 start_date/end_date 同時使用
+    const weatherApiBase = useHistoricalWeather
+      ? "https://archive-api.open-meteo.com/v1/archive"
+      : "https://api.open-meteo.com/v1/forecast";
+    const wxUrl = `${weatherApiBase}?latitude=${latitude}&longitude=${longitude}` +
+      `&daily=weather_code,temperature_2m_max,temperature_2m_min` +
+      `&timezone=auto&start_date=${fmt(startDate)}&end_date=${fmt(endDate)}`;
     const wxRes  = await fetch(wxUrl);
     const wxData = await wxRes.json();
     console.log("[天氣] API 回應：", wxData);
@@ -2265,7 +3001,7 @@ $("fetchWeatherBtn").addEventListener("click", async () => {
     persist();
     renderDayTabs();
     btn.textContent = "🌤️ 更新天氣";
-    aiTipsEl.innerHTML = `<div class="tip">✅ 已取得 <b>${cityName}</b> ${days.length} 天天氣預報！點各天查看詳情。</div>`;
+    aiTipsEl.innerHTML = `<div class="tip">✅ 已取得 <b>${cityName}${country ? ` / ${country}` : ""}</b> ${days.length} 天天氣${useHistoricalWeather ? "紀錄" : "預報"}！點各天查看詳情。</div>`;
   } catch (err) {
     alert(`😢 天氣查詢失敗：${err.message}`);
     btn.textContent = "🌤️ 小天使查天氣";
@@ -2363,10 +3099,12 @@ function collectAutoEntries() {
           spotId: s.id,
         });
       }
-      // 交通費（每組「景點 → 下一個景點」的所有 leg 加總成一筆）
+      // 交通費（每組「景點 → 下一個景點」的所有 leg 換算到基準幣別加總成一筆）
       if (i === spots.length - 1) return;
       if (!Array.isArray(s.travelLegs)) return;
-      const totalCost = s.travelLegs.reduce((n, l) => n + (+l.cost || 0), 0);
+      const baseCcy = state.baseCurrency;
+      const totalCost = s.travelLegs.reduce((n, l) =>
+        n + convertAmount(+l.cost || 0, l.ccy || baseCcy, baseCcy), 0);
       if (totalCost <= 0) return;
       const key = `transit_${s.id}`;
       const payment = state.spotPayments[key] || null;
@@ -2379,7 +3117,7 @@ function collectAutoEntries() {
         icon: "🚇",
         label: `${usedModes} ${s.name} → ${spots[i + 1].name}`,
         amt: totalCost,
-        ccy: state.baseCurrency,
+        ccy: baseCcy,
         paidBy: payment ? payment.paidBy : null,
         splitWith: payment ? payment.splitWith : allIds,
         payment,
@@ -2633,11 +3371,11 @@ function openExpenseModalForNew() {
   $("delExpenseBtn").hidden = true;
   $("expItem").value = "";
   $("expAmt").value = "";
-  $("expCcy").value = state.baseCurrency;
   // 預設付款人 = 第一位（"我"），分攤 = 全部
   selectedPaidBy = state.people[0]?.id;
   selectedSplitWith = state.people.map(p => p.id);
   renderExpensePeople();
+  $("expCcy").value = state.baseCurrency;
   $("expenseModal").hidden = false;
   setTimeout(() => $("expItem").focus(), 50);
 }
@@ -2650,10 +3388,10 @@ function openExpenseModalForEdit(id) {
   $("delExpenseBtn").hidden = false;
   $("expItem").value = e.item;
   $("expAmt").value = e.amt;
-  $("expCcy").value = e.ccy;
   selectedPaidBy = e.paidBy;
   selectedSplitWith = [...(e.splitWith || state.people.map(p => p.id))];
   renderExpensePeople();
+  $("expCcy").value = e.ccy || state.baseCurrency;
   $("expenseModal").hidden = false;
 }
 
@@ -2661,10 +3399,12 @@ let selectedPaidBy = null;
 let selectedSplitWith = [];
 
 function renderExpensePeople() {
+  const currentCcy = $("expCcy").value || state.baseCurrency;
   // 幣別下拉
   $("expCcy").innerHTML = CURRENCIES.map(c =>
     `<option value="${c.code}">${c.symbol} ${c.code} (${c.name})</option>`
   ).join("");
+  $("expCcy").value = CURRENCIES.some(c => c.code === currentCcy) ? currentCcy : state.baseCurrency;
 
   // 誰付的：單選
   $("expPaidBy").innerHTML = state.people.map(p => `
@@ -2869,6 +3609,11 @@ function renderMembersList() {
         if (e.paidBy === removedId) e.paidBy = fallback;
         e.splitWith = (e.splitWith || []).filter(id => id !== removedId);
         if (e.splitWith.length === 0) e.splitWith = state.people.map(p => p.id);
+      });
+      Object.values(state.spotPayments || {}).forEach(payment => {
+        if (payment.paidBy === removedId) payment.paidBy = fallback;
+        payment.splitWith = (payment.splitWith || []).filter(id => id !== removedId);
+        if (payment.splitWith.length === 0) payment.splitWith = state.people.map(p => p.id);
       });
       persist();
       renderMembersList();
