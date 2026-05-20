@@ -441,6 +441,13 @@ function renderTimeline() {
     timelineEl.appendChild(buildSpotCard(spot, i, spots.length));
     if (i < spots.length - 1) {
       timelineEl.appendChild(buildTransit(spot, spots[i + 1], i));
+      // 插入景點按鈕
+      const insertBtn = document.createElement("button");
+      insertBtn.className = "insert-spot-btn";
+      insertBtn.title = "在此插入景點";
+      insertBtn.textContent = "＋ 在此加景點";
+      insertBtn.addEventListener("click", () => openSpotModalForNew(spot.id));
+      timelineEl.appendChild(insertBtn);
     }
   });
 }
@@ -486,7 +493,8 @@ function buildSpotCard(spot, idx, total) {
       <div class="spot-actions">
         <span class="drag-handle" title="拖拉排序">⋮⋮</span>
         <button class="icon-btn" data-act="edit" data-id="${spot.id}" title="編輯">✎</button>
-        <button class="icon-btn" data-act="move" data-id="${spot.id}" title="移到別天 / 複製">📅</button>
+        <button class="icon-btn" data-act="clone" data-id="${spot.id}" title="複製景點">⧉</button>
+        <button class="icon-btn" data-act="move" data-id="${spot.id}" title="移到別天 / 複製到別天">📅</button>
         <button class="icon-btn del" data-act="del" data-id="${spot.id}" title="刪除">✕</button>
       </div>
     </div>
@@ -612,9 +620,17 @@ function handleSpotAction(act, id) {
     if (!confirm("真的要刪掉這個景點嗎？🥲")) return;
     const oldNextMap = snapshotNextMap(list);
     list.splice(i, 1);
-    // 上一個景點原本指向被刪的這個，現在指向別人 → 重置它的交通設定
     invalidateChangedEdges(list, oldNextMap);
     cascadeTimes(Math.max(i, 1));
+  } else if (act === "clone") {
+    // 在原景點下方插入複製品，交通設定重置
+    const clone = JSON.parse(JSON.stringify(list[i]));
+    clone.id = nextSpotId++;
+    clone.travelLegs = null;
+    const oldNextMap = snapshotNextMap(list);
+    list.splice(i + 1, 0, clone);
+    invalidateChangedEdges(list, oldNextMap);
+    cascadeTimes(i + 1);
   } else if (act === "edit") {
     openSpotModalForEdit(id);
     return;
@@ -1038,6 +1054,7 @@ $("saveLegsBtn").addEventListener("click", () => {
 // 新增 / 編輯 景點 Modal
 // ============================================================
 let editingSpotId = null;
+let insertAfterSpotId = null; // 插入到哪個景點後面（null = 加到最後）
 let tempPhotos = [];    // 編輯中的照片陣列（最多 3 張）
 let tempShopItems = []; // 編輯中的購物清單
 let tempLat = null;     // 查地址時暫存座標
@@ -1098,6 +1115,7 @@ function saveGeoCache(query, result) {
     lat: coords.lat,
     lng: coords.lng,
     source: result.source || "Nominatim",
+    precisionScore: result.precisionScore || scoreGeoResult(result, query),
   };
   const addrKey = normalizeGeoKey(result.addr);
   if (addrKey && addrKey !== key) state.geoCache[addrKey] = state.geoCache[key];
@@ -1122,6 +1140,106 @@ async function waitForNominatimSlot() {
   lastNominatimLookupAt = Date.now();
 }
 
+function compactGeoText(value = "") {
+  return normalizeGeoKey(value)
+    .replace(/[〒郵編邮编]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function dedupeGeoParts(parts) {
+  const seen = new Set();
+  return parts
+    .map(part => String(part || "").trim())
+    .filter(part => {
+      if (!part) return false;
+      const key = compactGeoText(part);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function hasStreetLevelPrecision(result) {
+  const addr = String(result?.addr || "");
+  const structured = result?.address || {};
+  return Boolean(
+    structured.house_number ||
+    structured.road ||
+    structured.pedestrian ||
+    structured.footway ||
+    structured.path ||
+    structured.building ||
+    /(\d+|[一二三四五六七八九十]+丁目|番地|號|号|路|街|巷|弄|road|street|avenue|lane|st\.?|rd\.?)/i.test(addr)
+  );
+}
+
+function geoContextHint() {
+  const text = [
+    state.meta?.title || "",
+    state.travel?.outbound?.arriveTo || "",
+    state.travel?.return?.departFrom || "",
+    ...Object.values(state.days || {}).flat().flatMap(s => [s?.name || "", s?.addr || ""]),
+  ].join(" ");
+  const hints = [
+    "京都", "大阪", "東京", "奈良", "神戶", "神戸", "沖繩", "沖縄", "北海道", "福岡",
+    "首爾", "釜山", "濟州", "台北", "台中", "台南", "高雄", "香港", "澳門",
+    "曼谷", "清邁", "新加坡", "巴黎", "倫敦", "羅馬", "米蘭", "紐約", "洛杉磯",
+  ];
+  return hints.find(hint => text.includes(hint)) || "";
+}
+
+function buildGeoQueries(query, options = {}) {
+  const base = String(query || "").trim();
+  if (!base) return [];
+  const contextPieces = dedupeGeoParts([
+    options.contextName,
+    options.contextAddress,
+    geoContextHint(),
+  ]).filter(part => compactGeoText(part) !== compactGeoText(base));
+  const queries = [base];
+  contextPieces.forEach(part => {
+    if (!compactGeoText(base).includes(compactGeoText(part))) {
+      queries.push(`${base} ${part}`);
+    }
+  });
+  if (contextPieces.length > 1) queries.push(`${base} ${contextPieces.join(" ")}`);
+  return dedupeGeoParts(queries).slice(0, 3);
+}
+
+function scoreGeoResult(result, query) {
+  if (!result) return 0;
+  const addr = String(result.addr || "");
+  const name = String(result.name || "");
+  const qKey = compactGeoText(query);
+  const addrKey = compactGeoText(addr);
+  const nameKey = compactGeoText(name);
+  const address = result.address || {};
+  let score = 0;
+
+  if (result.source === "Nominatim") score += 8;
+  if (hasStreetLevelPrecision(result)) score += 28;
+  if (address.postcode || /(?:〒|郵便番号|邮编)?\d{3}[-\s]?\d{4}/.test(addr)) score += 5;
+  if (address.city || address.town || address.village || address.municipality) score += 5;
+  if (address.state || address.county) score += 4;
+  if (address.country || /日本|韓國|韩国|台灣|台湾|Thailand|France|United States/i.test(addr)) score += 3;
+  if (qKey && nameKey && (nameKey.includes(qKey) || qKey.includes(nameKey))) score += 18;
+  if (qKey && addrKey.includes(qKey)) score += 10;
+  score += Math.min(16, dedupeGeoParts(addr.split(",")).length * 2);
+
+  const typeText = `${result.rawClass || ""} ${result.rawType || ""}`;
+  if (/(tourism|amenity|shop|leisure|historic|building|office|railway|aeroway)/i.test(typeText)) score += 8;
+  if (/(country|state|province|city|county|administrative)/i.test(typeText) && !hasStreetLevelPrecision(result)) score -= 12;
+  if (Number.isFinite(result.importance)) score += Math.min(8, result.importance * 10);
+  return score;
+}
+
+function chooseBestGeoResult(candidates, query) {
+  return candidates
+    .filter(Boolean)
+    .map(result => ({ ...result, precisionScore: scoreGeoResult(result, query) }))
+    .sort((a, b) => b.precisionScore - a.precisionScore)[0] || null;
+}
+
 function photonResultToGeo(feature, query) {
   if (!feature) return null;
   const coords = normalizeCoords(feature.geometry?.coordinates?.[1], feature.geometry?.coordinates?.[0]);
@@ -1130,26 +1248,66 @@ function photonResultToGeo(feature, query) {
   const parts = [
     p.name,
     p.street && p.housenumber ? `${p.street} ${p.housenumber}` : (p.street || ""),
+    p.locality,
     p.district,
     p.city,
+    p.county,
     p.state,
+    p.postcode,
     p.country,
   ].filter(Boolean);
   return {
-    addr: [...new Set(parts)].join(", ") || query,
+    addr: dedupeGeoParts(parts).join(", ") || query,
+    name: p.name || "",
+    address: {
+      house_number: p.housenumber || "",
+      road: p.street || "",
+      suburb: p.district || p.locality || "",
+      city: p.city || "",
+      county: p.county || "",
+      state: p.state || "",
+      postcode: p.postcode || "",
+      country: p.country || "",
+    },
     lat: coords.lat,
     lng: coords.lng,
-    source: "OpenStreetMap",
+    rawClass: p.osm_type || "",
+    rawType: p.type || "",
+    source: "Photon",
   };
 }
 
 function nominatimResultToGeo(item, query) {
   const coords = normalizeCoords(item?.lat, item?.lon);
   if (!coords) return null;
+  const address = item.address || {};
+  const name = item.name || item.namedetails?.["name:zh"] || item.namedetails?.["name:zh-TW"] || item.namedetails?.name || "";
+  const streetLine = dedupeGeoParts([
+    address.road || address.pedestrian || address.footway || address.path,
+    address.house_number,
+  ]).join(" ");
+  const structured = dedupeGeoParts([
+    address.amenity || address.tourism || address.shop || address.leisure || address.historic || address.building || name,
+    streetLine,
+    address.neighbourhood || address.quarter || address.suburb,
+    address.city_district || address.district || address.borough,
+    address.city || address.town || address.village || address.municipality,
+    address.county,
+    address.state,
+    address.postcode,
+    address.country,
+  ]).join(", ");
+  const displayName = String(item.display_name || "").trim();
+  const addr = displayName && displayName.length >= structured.length ? displayName : (structured || displayName || query);
   return {
-    addr: item.display_name || query,
+    addr,
+    name,
+    address,
     lat: coords.lat,
     lng: coords.lng,
+    rawClass: item.class || "",
+    rawType: item.type || "",
+    importance: Number(item.importance),
     source: "Nominatim",
   };
 }
@@ -1159,30 +1317,37 @@ async function geocodeAddress(query, options = {}) {
   if (!q) return null;
 
   const cached = getGeoCacheHit(q);
-  if (cached) return cached;
+  if (cached && (hasStreetLevelPrecision(cached) || (cached.precisionScore || 0) >= 42)) return cached;
+
+  const queries = buildGeoQueries(q, options);
+  const candidates = [];
 
   if (options.usePhoton) {
-    try {
-      const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=zh`;
-      const data = await fetchJsonWithTimeout(url, 5000);
-      const result = photonResultToGeo(data.features?.[0], q);
-      if (result) {
-        saveGeoCache(q, result);
-        return result;
-      }
-    } catch {}
+    for (const geoQuery of queries) {
+      try {
+        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(geoQuery)}&limit=5&lang=zh`;
+        const data = await fetchJsonWithTimeout(url, 5000);
+        candidates.push(...(data.features || []).map(feature => photonResultToGeo(feature, geoQuery)));
+      } catch {}
+    }
   }
 
-  try {
-    await waitForNominatimSlot();
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&accept-language=zh-TW,zh`;
-    const data = await fetchJsonWithTimeout(url, 5000);
-    const result = nominatimResultToGeo(data?.[0], q);
-    if (result) {
-      saveGeoCache(q, result);
-      return result;
-    }
-  } catch {}
+  for (const geoQuery of queries) {
+    try {
+      await waitForNominatimSlot();
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(geoQuery)}&format=json&limit=5&addressdetails=1&namedetails=1&accept-language=zh-TW,zh,en`;
+      const data = await fetchJsonWithTimeout(url, 5000);
+      candidates.push(...(data || []).map(item => nominatimResultToGeo(item, geoQuery)));
+    } catch {}
+    const precise = chooseBestGeoResult(candidates, q);
+    if (precise && precise.precisionScore >= 48) break;
+  }
+
+  const result = chooseBestGeoResult(candidates, q) || cached;
+  if (result) {
+    saveGeoCache(q, result);
+    return result;
+  }
 
   return null;
 }
@@ -1214,16 +1379,19 @@ function setCategory(id) {
 
 $("addSpotBtn").addEventListener("click", openSpotModalForNew);
 
-function openSpotModalForNew() {
+function openSpotModalForNew(afterId = null) {
   addrLookupSeq++;
   editingSpotId = null;
+  insertAfterSpotId = afterId ?? null;
   $("spotModalTitle").textContent = "📍 新增一個景點";
   $("saveSpot").textContent = "加進行程";
   resetSpotForm();
-  // 預設時間：接續前一個景點
+  // 預設時間：接續插入點之後的景點，或接續最後一個景點
   const spots = state.days[state.currentDay];
-  if (spots.length > 0) {
-    const last = spots[spots.length - 1];
+  const afterIdx = insertAfterSpotId != null ? spots.findIndex(s => s.id === insertAfterSpotId) : -1;
+  const refSpot = afterIdx >= 0 ? spots[afterIdx] : (spots.length > 0 ? spots[spots.length - 1] : null);
+  if (refSpot) {
+    const last = refSpot;
     const { totalMins } = getTransit(last, null);
     const nextStart = toMinutes(last.start) + (last.dur || 0) + totalMins;
     $("spotStart").value = toHHMM(nextStart);
@@ -1421,7 +1589,7 @@ $("spotAddr").addEventListener("input", () => {
 });
 
 // ---- 地址自動查詢 ----
-// 策略：先試 Photon（komoot，CORS 友好、日文效果佳），再試 Nominatim
+// 策略：Photon + Nominatim 多筆候選評分，優先挑街道 / 門牌 / 景點名更完整的結果
 async function lookupAddress(query) {
   const q = String(query || "").trim();
   if (!q) return null;
@@ -1436,7 +1604,11 @@ async function lookupAddress(query) {
   hintEl.style.color = "";
   resetTempCoords();
 
-  const result = await geocodeAddress(q, { usePhoton: true });
+  const result = await geocodeAddress(q, {
+    usePhoton: true,
+    contextName: $("spotName").value,
+    contextAddress: $("spotAddr").value,
+  });
   const stillCurrent =
     token === addrLookupSeq &&
     editingSpotId === startedEditingId &&
@@ -1447,7 +1619,8 @@ async function lookupAddress(query) {
   if (result) {
     $("spotAddr").value = result.addr;
     setTempCoords(result.lat, result.lng, result.addr);
-    hintEl.textContent = `✅ 已帶入地址（來源：${result.source}），可再手動調整`;
+    const confirmUrl = `https://www.google.com/maps?q=${result.lat},${result.lng}`;
+    hintEl.innerHTML = `✅ 已帶入較精準地址（來源：${result.source}），可再手動調整　<a href="${confirmUrl}" target="_blank" rel="noopener" style="color:#3A5BC7;font-weight:600">📍 在 Google 地圖確認</a>`;
     hintEl.style.color = "#3C8D6A";
     return result;
   }
@@ -1465,9 +1638,17 @@ $("spotName").addEventListener("blur", () => {
   const addr = $("spotAddr").value.trim();
   if (name && !addr) lookupAddress(name);
 });
-// 「查地址」按鈕 → 永遠用景點名稱查（不用地址欄位的值）
+// 離開地址欄位 → 若手動填入（與目前座標來源不同），自動 geocode 並顯示 Google Maps 確認連結
+$("spotAddr").addEventListener("blur", () => {
+  const addr = $("spotAddr").value.trim();
+  if (!addr) return;
+  // 若地址與已存的座標來源一致，不重複查
+  if (tempGeoKey && normalizeGeoKey(addr) === tempGeoKey) return;
+  lookupAddress(addr);
+});
+// 「查地址」按鈕 → 優先用景點名稱查，若已有地址會一起作為精準度線索
 $("lookupAddrBtn").addEventListener("click", () => {
-  const q = $("spotName").value.trim();
+  const q = $("spotName").value.trim() || $("spotAddr").value.trim();
   if (q) lookupAddress(q);
   else {
     $("addrHint").textContent = "請先填入景點名稱再查詢";
@@ -1516,13 +1697,23 @@ $("saveSpot").addEventListener("click", () => {
     Object.assign(old, data);
     changedIdx = i;
   } else {
-    list.push({
-      id: nextSpotId++,
-      ...data,
-      travelLegs: null,
-    });
-    changedIdx = list.length - 1;
-    // 景點費用已透過「自動：景點門票」顯示，不需另存進 expenses 避免重複計算
+    const newSpot = { id: nextSpotId++, ...data, travelLegs: null };
+    if (insertAfterSpotId != null) {
+      const afterIdx = list.findIndex(s => s.id === insertAfterSpotId);
+      if (afterIdx >= 0) {
+        const oldNextMap = snapshotNextMap(list);
+        list.splice(afterIdx + 1, 0, newSpot);
+        invalidateChangedEdges(list, oldNextMap);
+        changedIdx = afterIdx + 1;
+      } else {
+        list.push(newSpot);
+        changedIdx = list.length - 1;
+      }
+    } else {
+      list.push(newSpot);
+      changedIdx = list.length - 1;
+    }
+    insertAfterSpotId = null;
   }
   // 新增／改了景點後，時間從這個點往後連動
   cascadeTimes(changedIdx + 1);
@@ -2491,7 +2682,10 @@ document.querySelectorAll(".modal").forEach(m => {
   m.addEventListener("click", e => { if (e.target === m) closeModal(m); });
 });
 function openModal(m)  { m.hidden = false; }
-function closeModal(m) { m.hidden = true; }
+function closeModal(m) {
+  m.hidden = true;
+  if (m === spotModal) insertAfterSpotId = null;
+}
 
 // ============================================================
 // AI 小幫手（模擬版）

@@ -447,6 +447,31 @@ input { font-family: inherit; }
 .icon-btn:hover { background: var(--peach); color: white; }
 .icon-btn.del:hover { background: #F4967F; }
 
+/* ---------- 景點中間插入按鈕 ---------- */
+.insert-spot-btn {
+  display: block;
+  width: 100%;
+  margin: 2px 0;
+  padding: 4px 0;
+  border: 1.5px dashed var(--peach);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--peach);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .2s, background .15s;
+}
+.insert-spot-btn:hover {
+  background: #FFF0EC;
+  opacity: 1 !important;
+}
+#timeline:hover .insert-spot-btn,
+.insert-spot-btn:focus {
+  opacity: 0.55;
+}
+
 /* ---------- 交通方塊 ---------- */
 .transit {
   display: flex;
